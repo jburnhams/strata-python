@@ -113,3 +113,13 @@ def test_concurrent_saves_of_different_keys_lose_nothing(settings):
     assert errors == []
     assert many.load() == dict.fromkeys(keys, "v")
     assert [n for n in os.listdir(many.home()) if n.endswith(".tmp")] == []
+
+
+def test_an_explicit_prefix_names_the_variables(monkeypatch, isolated_env):
+    s = Settings("my-app", [Setting("greeting", default="Hello")], prefix="MA")
+    monkeypatch.setenv("MA_HOME", str(isolated_env / "ma-home"))
+    monkeypatch.setenv("MA_GREETING", "Yo")
+    assert s.home() == str(isolated_env / "ma-home")
+    assert s.get("greeting") == "Yo"
+    assert s.env_name("greeting") == "MA_GREETING"
+    assert os.path.basename(Settings("my-app", []).home()) == ".my-app"  # the folder is still named for the app
