@@ -55,9 +55,11 @@ class Setting:
 
 
 class Settings:
-    def __init__(self, app: str, settings: Sequence[Setting]) -> None:
+    def __init__(self, app: str, settings: Sequence[Setting], *, prefix: str | None = None) -> None:
+        """`prefix` names the environment variables (`<PREFIX>_HOME`, `<PREFIX>_<KEY>`); default the upper-cased app name with `-` as `_`.
+        Give it when an app's variables already have a short form that deployed services use."""
         self.app = app
-        self.prefix = app.upper().replace("-", "_")
+        self.prefix = prefix or app.upper().replace("-", "_")
         self._by_key = {s.key: s for s in settings}
         self._thread_lock = threading.Lock()  # file_lock alone does not exclude threads on every platform
 
