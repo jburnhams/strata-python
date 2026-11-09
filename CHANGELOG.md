@@ -2,6 +2,11 @@
 
 ## 2026-11-09
 
+**`Settings(prefix=...)` (branch `claude/project-thread-iw7199`)**
+Moving bright-horizons onto the library: its deployed service already uses `BH_*` variables, which the default prefix (`BRIGHT_HORIZONS_`) would have silently ignored.
+
+- `src/strata_python/settings.py`: optional keyword `prefix` names the environment variables; default unchanged. `tests/unit/test_settings.py`: test for it.
+
 **Create the library (branch `claude/project-thread-iw7199`)**
 
 Jonathan asked for a `strata-python` project holding the server code the template and the strata apps were duplicating (six drifted copies of `oslib.py`, five of `settings.py`, copies of the server skeleton, CLI commands, hermetic test fixtures and `scripts/check.py`). This is its first version, built from the template's typed modules and made generic. The apps and the template have not been moved onto it yet.
