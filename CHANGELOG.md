@@ -3,7 +3,7 @@
 ## 2026-11-09
 
 **`Settings(prefix=...)` (branch `claude/project-thread-iw7199`)**
-Moving bright-horizons onto the library: its deployed service already uses `BH_*` variables, which the default prefix (`BRIGHT_HORIZONS_`) would have silently ignored.
+An app that moves onto the library may already run as a service with short environment variables (`MA_*`); the default prefix (`MY_APP_`) would silently ignore them.
 
 - `src/strata_python/settings.py`: optional keyword `prefix` names the environment variables; default unchanged. `tests/unit/test_settings.py`: test for it.
 
