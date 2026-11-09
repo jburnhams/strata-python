@@ -85,3 +85,31 @@ def test_absolute_path_expands_the_user_folder():
 
 def test_prefix_of_a_dashed_app_name():
     assert Settings("my-app", []).prefix == "MY_APP"
+
+
+def test_an_empty_value_round_trips_when_the_setting_allows_it(settings):
+    settings.save({"odd": ""})
+    assert settings.get("odd") == ""
+
+
+def test_concurrent_saves_of_different_keys_lose_nothing(settings):
+    import threading
+
+    keys = [f"k{i}" for i in range(12)]
+    many = Settings("demo", [Setting(k, default="") for k in keys])
+    errors: list[BaseException] = []
+
+    def write(k: str) -> None:
+        try:
+            many.save({k: "v"})
+        except BaseException as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=write, args=(k,)) for k in keys]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert many.load() == dict.fromkeys(keys, "v")
+    assert [n for n in os.listdir(many.home()) if n.endswith(".tmp")] == []

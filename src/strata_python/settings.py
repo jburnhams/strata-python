@@ -13,9 +13,13 @@ Values are strings: the file is edited by hand as well as by the app."""
 
 import json
 import os
+import tempfile
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
+
+from strata_python.oslib import file_lock
 
 
 def non_empty(value: str) -> str:
@@ -55,6 +59,7 @@ class Settings:
         self.app = app
         self.prefix = app.upper().replace("-", "_")
         self._by_key = {s.key: s for s in settings}
+        self._thread_lock = threading.Lock()  # file_lock alone does not exclude threads on every platform
 
     @property
     def keys(self) -> tuple[str, ...]:
@@ -82,29 +87,33 @@ class Settings:
     def save(self, changes: Mapping[str, object]) -> dict[str, Any]:
         """Merge `changes` into the file and return the saved contents. Unknown keys raise KeyError, a value its normaliser refuses raises ValueError
         (naming the key), and None removes the setting. All changes are checked before any is written."""
-        d = self.load()
-        for k, v in changes.items():
+        for k in changes:
             if k not in self._by_key:
                 raise KeyError(f"unknown setting {k!r}")
-            if v is None:
-                d.pop(k, None)
-                continue
-            try:
-                d[k] = self._by_key[k].normalise(str(v))
-            except ValueError as e:
-                raise ValueError(f"{k}: {e}") from e
         os.makedirs(self.home(), exist_ok=True)
-        tmp = self.path() + ".tmp"
-        with open(tmp, "w", encoding="utf8") as f:
-            json.dump(d, f, indent=1)
-        os.replace(tmp, self.path())  # atomic: a reader never sees half a file
+        # The whole read-merge-write is one critical section, across threads (the server's PUT handlers run in a pool) and processes (the CLI `set` beside a running server);
+        # otherwise two saves of different keys lose one update.
+        with self._thread_lock, open(self.path() + ".lock", "a+") as lock, file_lock(lock):
+            d = self.load()
+            for k, v in changes.items():
+                if v is None:
+                    d.pop(k, None)
+                    continue
+                try:
+                    d[k] = self._by_key[k].normalise(str(v))
+                except ValueError as e:
+                    raise ValueError(f"{k}: {e}") from e
+            fd, tmp = tempfile.mkstemp(dir=self.home(), prefix="settings.", suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf8") as f:
+                json.dump(d, f, indent=1)
+            os.replace(tmp, self.path())  # atomic: a reader never sees half a file
         return d
 
     def get(self, key: str) -> str:
         s = self._by_key[key]
         stored = self.load().get(key)
         for raw in (os.environ.get(self.env_name(key)), stored if isinstance(stored, str) else None):
-            if raw:
+            if raw is not None:  # "" is a value; the normaliser decides whether it is acceptable
                 try:
                     return s.normalise(raw)
                 except ValueError:
