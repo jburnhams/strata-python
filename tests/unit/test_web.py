@@ -67,9 +67,13 @@ def landing(tmp_path):
 
 
 @pytest.fixture
-def app(static, landing):
+def app(static, landing, tmp_path):
     s = Settings(
-        "demo", [Setting("data_dir", default="/tmp/x", normalise=absolute_path), Setting("greeting", default="Hello")]
+        "demo",
+        [
+            Setting("data_dir", default=str(tmp_path / "data"), normalise=absolute_path),
+            Setting("greeting", default="Hello"),
+        ],
     )
     a = web.base_app("demo", "1.2.3", s)
     web.add_web(a, static, landing)
