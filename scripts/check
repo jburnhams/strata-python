@@ -1,0 +1,4 @@
+#!/bin/bash
+# The one gate (see src/strata_python/check.py). Called by git hooks and by hand: scripts/check [--fast|--fix]
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$DIR/.." && exec uv run --locked strata-check "$@"
