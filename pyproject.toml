@@ -60,7 +60,7 @@ db = [
 pdf = [
     "reportlab>=4.2,<6",
     "pypdfium2>=4.30,<6",
-    "pillow>=10,<13",
+    "pillow>=10,<14",
 ]
 
 [project.urls]
