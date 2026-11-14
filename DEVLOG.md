@@ -4,6 +4,16 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**A durable job queue: `strata_python.tasks.queue` (branch `claude/project-thread-aefumh`)**
+
+The plan's last step before the later modules: one queue for the seven job systems. It follows the survey's design: listory's schema and claim loop on SQLAlchemy Core, the strata-models store's style (injectable clock, conditional-UPDATE claim, cursor paging, `recover`, `prune`, `step`), and `tasks.retry`. The first adopter the plan names is strata-scan, with listory replacing its own queue as the proof; neither has moved yet.
+
+- `src/strata_python/tasks/queue.py` **new**: `jobs_table`, `Job`, `Queue`, `Worker`, `WorkerLost`, `JobCancelled`, `dedupe_key`. Times are float epochs in the table so both backends store them the same; `Task` turns them into aware datetimes. Claims hold a lock in the process and, on Postgres, `pg_advisory_xact_lock`, so two workers cannot start two jobs that share a resource. Cancel and timeout are cooperative (`job.stopping`): killing a thread is not possible, and work that must be killable is a `Detached` process. Subprocess isolation per job, which listory has, is not here yet.
+- The method that lists jobs is `page`, not `list`: inside the class `list` would shadow the builtin in its own annotations (ty refuses `list[str]` there).
+- `tests/unit/test_queue.py` **new**: every case on a SQLite file and on the throwaway Postgres: paging, priority and delay, dedupe, resources, backoff then failure with `on_fail`, `RetryLater` and progress resetting the count, cancel (queued, running, raising), recovery of a dead pid and of a stale heartbeat (another host's job only when stale), prune, and real worker threads with a timeout and a shutdown that releases its job.
+- `README.md` (module table, step 6b), `CHANGELOG.md`.
+
+
 **Contracts, a service client base, web extras and the task primitives (branch `claude/project-thread-aefumh`)**
 
 The owner asked for the rest of the library work in the move-out plan while the apps move onto 0.2.x. These are its steps 3 to 5 (web extras, contracts and `ServiceClient`, task primitives), designed from the survey's notes on each app's copy. The models client stays standard library only and keeps its own calls (decided earlier today); only its `Unavailable` now subclasses the shared one, so `add_error_handlers` answers it as 503.

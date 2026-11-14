@@ -10,7 +10,7 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 | `strata_python.cli` | `add_doctor` (imports, labels, optional modules and the app's own `Check`s), `add_set`, `add_serve` for the app's argparse subcommands |
 | `strata_python.contracts` | The shapes the apps' APIs share, as pydantic models for `response_model`: `Health`, `SystemInfo`, `ErrorBody`, `Task` (with `TaskState`), `Progress`, `Page[T]`, `FileRef`, `Judgment` |
 | `strata_python.client` | `ServiceClient`, the standard-library base for calling a strata service: JSON calls, `Rejected` (4xx, with the reason and payload) and `Unavailable` (down or 5xx), retried reads, a long-poll `wait`, `available()`, and `env_url` |
-| `strata_python.tasks` | Work outside a request: `next_state`/`backoff_s`/`RetryLater` (when to retry), `report_progress` and `ProgressReporter` (throttled), `SingleFlight` (one run per key, `Conflict` on a second), `StatusFile` and `Detached` (a process that outlives the server), `Ticker` (a loop that survives its errors) |
+| `strata_python.tasks` | Work outside a request: `next_state`/`backoff_s`/`RetryLater` (when to retry), `report_progress` and `ProgressReporter` (throttled), `SingleFlight` (one run per key, `Conflict` on a second), `StatusFile` and `Detached` (a process that outlives the server), `Ticker` (a loop that survives its errors), and with the `[db]` extra `tasks.queue` (`Queue`, `Worker`, `jobs_table`: durable jobs with retry, dedupe, resources, cancel and crash recovery) |
 | `strata_python.clients.models` | The strata-models client, standard library only: `run`, `submit`, `wait`, `role_model`, `gpu_lease`, a shortcut for every role the service runs (`faces`, `face_kind`, `transcribe`, `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed`, `enhance_video`, and `ask` for the language models) and a typed result for each |
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
 | pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, `fake_models` (a stand-in strata-models), and the `integration` marker on everything under `tests/integration` |
@@ -196,6 +196,19 @@ Replace the app's job dicts and loops with `strata_python.tasks`:
 - Work that must outlive a restart is `Detached(cmd, status_path, log)`: `start()`, `read()`, `stop()`. The child writes its own progress and end state with `StatusFile.from_env().update(...)`. Delete the app's `write_status` copies and its pid bookkeeping.
 - A loop every N seconds is `Ticker(every_s, fn, name=...)`. Delete the hand-written `while not stop.wait(...)` threads.
 - Progress from deep inside a task is `report_progress(done, total, text)`; the runner binds a `ProgressReporter` (at most one write a second). Retry rules are `next_state(attempts, error, progressed=...)`: delete the app's own backoff.
+- Jobs that must survive a restart, retry and be listed are the durable queue (with the db extra). Add `JOBS = jobs_table(Base.metadata)` to the models and a revision, then:
+
+```python
+from strata_python.tasks.queue import Job, Queue, Worker
+
+QUEUE = Queue(engine, JOBS, on_fail=cascade)                   # on_fail(conn, job, error), in the failing transaction
+QUEUE.enqueue("ocr", {"page": 3}, domain="book:12", dedupe=True, resources=["gpu"], timeout_s=600)
+WORKER = Worker(QUEUE, {"ocr": ocr_page}, concurrency=2).start()   # recovers jobs a dead worker left running
+QUEUE.page(state="running", after=cursor)                      # Page[Task] for GET /api/jobs
+QUEUE.cancel(job_id); QUEUE.retry(job_id); QUEUE.prune(older_than_s=30 * 86400)
+```
+
+  A handler is `fn(job) -> result`; it reads `job.options`, reports progress, and returns early when `job.stopping` (cancelled, past its timeout, or the worker stopping). In tests, `QUEUE.step(handlers)` claims and runs one job in the test's own thread.
 
 ### 7. Tests
 
