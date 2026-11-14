@@ -6,30 +6,24 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ### Added
 
+- `strata_python.pages` and the `[pdf]` extra (ReportLab, pypdfium2, Pillow): a scanned page described as blocks, lines, styled spans and figures in scan pixels (`Page`, `Block`, `Line`, `Span`, `Figure`, JSON with `to_dict`/`from_dict`), drawn as a PDF with real, embedded fonts by `pages.render.render(page, fonts)`, and read back with `rasterise(pdf, page, dpi)` (greyscale pixels at the scan's size) and `read_text(pdf)`. A span takes a font matcher's per-word fit as it is (`x`, `baseline_y`, `size_pt`, `tracking_em`, `hscale`, `stroke_em`); small capitals are synthesised unless the face is a small-caps cut; the same input gives the same bytes. For apps that rebuild scanned books, and for scoring a rebuild against the scan with the very renderer that prints it.
 - `strata_python.clients.models`: the strata-models client, standard library only, with the same functions as `strata_models_client` (`run`, `submit`, `wait`, `wait_job`, `faces`, `transcribe`, `ocr`, `speak`, `role_model`, `acquire`, `gpu_lease`, `Unavailable`, `JobFailed`), now typed, plus a shortcut for each of the other roles the service runs (`ask` for `vision-language`, `text` and the judges; `generate_image`, `embed`, `face_kind`, `denoise_audio`, `audio_quality`, `enhance_video`) and a result shape for every role (`OcrPage`, `Transcript`, `Faces`, `Speech`, `Answer`, `GeneratedImage`, `Embeddings`, `FaceKinds`, `CleanAudio`, `AudioQuality`, `EnhancedVideo`; `.from_json`, with everything the service sent in `.raw`). `ROLES` lists them. To move: replace `import strata_models_client as sm` with `from strata_python.clients import models as sm` and drop the client's path or git dependency.
-
 - Typed settings: normalisers `number_between(lo, hi)`, `whole_between(lo, hi)`, `iso_date(allow_blank=True)` and `boolean`, and getters `get_int`, `get_float`, `get_bool`. Replace an app's own range and date normalisers and its `int(SETTINGS.get(...))` calls.
 - `ListSetting(key, default=..., item=..., sep=os.pathsep, env=...)`: a list of strings, a JSON list in the file, split on `sep` in the environment, read with `get_list`. `all()`, `GET /api/settings` and `PUT /api/settings` carry it as a JSON list, and `set` shows and takes it joined. An app with a list of folders can now drop its own settings file handling.
 - Settings stores: `Settings(..., store=...)` and `Settings.bind(store)` keep the values in any object with `load()` and `update(changes)`. On the first bind the JSON file's values are copied in once. `strata_python.db.settings` has the table every app shares (`settings_table(Base.metadata)`) and its `TableStore`, on SQLite and Postgres.
-
 - `cli.add_doctor(..., checks=[...], hint="...")`: imports can be `(label, module)` pairs or `cli.Module(label, module, optional=True)`, and `cli.Check(label, fn)` rows (`fn` returns `(status, text)`; `ok`, `missing`, `slow` or `broken`) cover what an import cannot tell, with `cli.program("ffmpeg")` for a program on the PATH. Every app's rows line up the same. `cli.doctor(...)` runs the same thing directly. Replace an app's own `doctor` with these.
 - `web.base_app(..., health=lambda: {...})` adds the app's own fields to `GET /api/health` after `ok` and `version`; it may set `ok` to false. Replace an app's own health route with it.
+- `oslib.lower_priority(nice, io=True)` also lowers disk priority for batch jobs that read many large files: the idle I/O class on Linux (children inherit it), background mode on Windows, I/O throttling on macOS. Replace the app's own `ionice -c3 -p <pid>` helper with it.
+- `strata-public-check` takes `[tool.strata-public-check] exclude = [...]` in pyproject.toml and `--exclude GLOB` to skip the built-in patterns in matching files (an sdist's copy matches too), and skips the built-in patterns on a line that says `strata-public-check: ignore`. Neither silences `STRATA_PUBLIC_DENY`.
 
 ### Changed
 
 - `Settings.all()` is typed `dict[str, str | list[str]]`, since a `ListSetting` is a list. It is unchanged for an app with only `Setting`s, but its type checker may now ask it to narrow a value it passes on as a `str`.
-
 - The documented way to declare an app's models base is now the class written out (`class Base(MappedAsDataclass, DeclarativeBase): metadata = MetaData(naming_convention=NAMING_CONVENTION)`, README step 8), because ty rejects `Base = make_base()` as a base class and fails the gate. `make_base()` still works and stays for code that needs a base at run time; an app that uses it for its models should switch.
-
-### Added
-
-- `oslib.lower_priority(nice, io=True)` also lowers disk priority for batch jobs that read many large files: the idle I/O class on Linux (children inherit it), background mode on Windows, I/O throttling on macOS. Replace the app's own `ionice -c3 -p <pid>` helper with it.
-- `strata-public-check` takes `[tool.strata-public-check] exclude = [...]` in pyproject.toml and `--exclude GLOB` to skip the built-in patterns in matching files (an sdist's copy matches too), and skips the built-in patterns on a line that says `strata-public-check: ignore`. Neither silences `STRATA_PUBLIC_DENY`.
 
 ### Fixed
 
 - `strata-public-check` no longer reads three-part versions (`10.4.2` in package.json and package-lock.json) as private IPv4 addresses: only a whole four-part address counts. An app with a web front end can now run it in CI.
-
 - The db pytest plugin no longer stops an app's tests from running when the old database package is installed too ("option names {'--pg'} already added"). It now switches on only for an app that uses `strata_python.db`: the db extra installed and a `[tool.strata-db]` table in pyproject.toml, or `strata_db = true` in `[tool.pytest.ini_options]` (`strata_db = false` turns it off). SQLAlchemy and Alembic brought in by another package no longer switch on its guard. Until it is on it adds no `--pg`; once on, `--pg` is ours unless another plugin has it, and `--strata-pg` always works. Drop the old database package once the app has moved to `strata_python.db`.
 
 ## 0.2.1 (2026-11-14)

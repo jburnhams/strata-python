@@ -81,6 +81,14 @@ Two apps reported that with 0.2.1 installed pytest would not start when the old 
 - `tests/unit/test_db.py`: a stand-in plugin that adds `--pg` first; `--pg` and `--strata-pg` offered once on; the plugin off (guard not started, drivers not wrapped, `--pg` left to the other plugin, fixtures failing with the reason) with no table and with `strata_db = false`, in a subprocess since the guard is per process. All four failed before the change.
 - `README.md` (step 8, tests), `AGENTS.md` (the db plugin rule), `CHANGELOG.md`.
 
+**Scanned pages drawn as PDFs: `strata_python.pages` (branch `claude/project-thread-dvu0cz`, issue #9)**
+
+The owner wants evals of how close a rebuilt PDF of a scanned book page gets to the cleaned scan (layout, figures, typefaces), with strata-models owning the models and the scoring, and the rendering here so the apps that print rebuilt books (strata-scan first) draw with the code that was scored.
+
+- `src/strata_python/pages/model.py` **new**: the description, plain dataclasses with no third-party import so an app can build and send one without the extra. Boxes are `(x, y, w, h)` in scan pixels like Tesseract's; styles, roles, alignments and figure kinds are closed sets checked on construction (`PageError`); `to_dict` leaves defaults out. `Span` carries a font matcher's per-word fit (`x`, `baseline_y`, `size_pt`, `tracking_em`, `hscale`, `stroke_em`), the shape agreed with the strata-models font-match role.
+- `src/strata_python/pages/render.py` **new**: ReportLab writes (BSD), pdfium reads back (BSD/Apache); PyMuPDF was ruled out for its AGPL licence. One text object a run, because ReportLab's text cursor ignores tracking and horizontal scale, so positions are worked out here. A line is fitted to its box by glyph spacing only, at most 0.1 em a glyph, so a near face lands where the print was without stretching glyphs; placed words are never refitted. Small capitals are synthesised at 0.78 unless the face is a small-caps cut; extra weight is a stroke round the glyphs (render mode 2). `invariant=1` makes the bytes depend only on the input. Faces are registered once a process under a name from their path, because ReportLab's font registry is global. Both libraries are untyped, so they are reached through `Any`; this module's own signatures are complete (pyright strict, ty).
+- `tests/unit/test_pages.py` **new**: real renders read back by pdfium (no mocks): ink inside the line box, fitting within its limit, alignment, size, baseline, tracking, scale, weight, placed words, small capitals, an embedded TrueType face (ReportLab's own Vera), figures, several pages, the text read back, and the description's JSON round trip and refusals.
+- `pyproject.toml`: the `pdf` extra, in this repo's dev group so its tests run. `README.md`, `AGENTS.md`: module table and layout.
 
 **The shared database code moves in as `strata_python.db` (branch `claude/project-thread-t4kvbv`)**
 
