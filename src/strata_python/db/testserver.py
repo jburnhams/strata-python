@@ -182,17 +182,21 @@ def url() -> str:
         listen = f"-k {d} -c listen_addresses=''"
         where = f"localhost/postgres?host={quote(d, safe='')}"  # also parses as a WHATWG URL
     opts = f"{listen} -c fsync=off -c synchronous_commit=off -c full_page_writes=off -c max_connections=200"
-    log = os.path.join(d, "log")
-    r = subprocess.run(  # noqa: S603  (the server's own pg_ctl)
-        [_tool(bindir, "pg_ctl"), "-D", data, "-l", log, "-o", opts, "-w", "start"],
-        capture_output=True,
-        text=True,
-        cwd=bindir,
-    )
+    log, out = os.path.join(d, "log"), os.path.join(d, "pg_ctl.out")
+    # pg_ctl's output goes to a file, not a pipe: on Windows the server it starts inherits the pipe, so reading it
+    # to the end would wait for the server to exit.
+    with open(out, "w", encoding="utf-8") as sink:
+        r = subprocess.run(  # noqa: S603  (the server's own pg_ctl)
+            [_tool(bindir, "pg_ctl"), "-D", data, "-l", log, "-o", opts, "-w", "start"],
+            stdin=subprocess.DEVNULL,
+            stdout=sink,
+            stderr=subprocess.STDOUT,
+            cwd=bindir,
+        )
     if r.returncode:
-        text = open(log, encoding="utf-8", errors="replace").read() if os.path.exists(log) else ""  # noqa: SIM115
+        said = "".join(open(f, encoding="utf-8", errors="replace").read() for f in (out, log) if os.path.exists(f))  # noqa: SIM115
         _stop(d, bindir)
-        raise RuntimeError(f"could not start the private test server:\n{r.stderr}\n{text}")
+        raise RuntimeError(f"could not start the private test server:\n{said}")
     owner = os.getpid()
     _watch(owner, bindir, d)
     atexit.register(lambda: os.getpid() == owner and _stop(d, bindir))  # not in forked children
