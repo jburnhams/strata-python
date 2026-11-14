@@ -4,6 +4,17 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**Settings: typed values, lists and a pluggable store (issues #10, #16; branch `claude/project-thread-vzy9v6`)**
+
+strata-stills could not adopt `Settings` because two of its settings are lists, and strata-models because its settings move into a database table and it has numbers, ranges and dates. Both kept a copy of `settings.py`. Typed int, float and bool settings were left as normalisers plus getters, not new kinds. The values stay canonical strings, so the file is still hand-editable and every existing app reads the same. Only lists needed a new kind.
+
+- `src/strata_python/settings.py`: `number_between`, `whole_between`, `iso_date`, `boolean`; `get_int`, `get_float`, `get_bool`, `get_list` and `value`; `ListSetting`; `SettingsStore` (a protocol: `load`, `update`), `JsonFileStore`, which is the old file code moved as it was, lock and atomic replace included, and `Settings(store=)`, `Settings.file` and `bind(store, import_file=True)`, which copies the file's valid values in once and leaves a marker row. Each kind parses through one `parse` method, so the environment, the store and `save` agree on what a value is.
+- `src/strata_python/db/settings.py` **new**: `settings_table(metadata)` (key, value as JSON text, the same on both backends) and `TableStore`, an upsert per key in one transaction so concurrent saves of different keys keep both.
+- `src/strata_python/web.py`: the settings routes carry lists.
+- `tests/unit/test_settings.py`: each normaliser and getter, lists from the file, the environment and `save`, a hand-edited list file, `bind` copying once and not again. `tests/unit/test_db.py`: the table store on SQLite and Postgres with concurrent saves. `tests/unit/test_web.py`: lists over real HTTP. `tests/unit/test_cli.py`: `set` on a list.
+- `README.md` (module table, step 3), `AGENTS.md` (layout), `CHANGELOG.md`.
+
+
 **Doctor checks and health fields an app can add (issues #15, #17; branch `claude/project-thread-vzy9v6`)**
 
 strata-stills and strata-models each kept their own `doctor`, and strata-models its own `/api/health`, because the shared ones could not be extended. The two issues asked for the same doctor hook in two shapes (`(ok | None, line)` and a four-word status); this takes the four-word one, which says more, with `optional=` for the "not available, not a failure" case.

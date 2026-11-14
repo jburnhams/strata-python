@@ -5,7 +5,7 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 | Module | What it gives an app |
 |---|---|
 | `strata_python.oslib` | Cross-platform file locks, process liveness (`pid_alive`), `kill_tree`, `lower_priority`, `venv_python`, `cli_command(module)` |
-| `strata_python.settings` | `Settings` / `Setting`: one JSON file in `~/.<app>` with `<APP>_*` environment overrides, validation (`absolute_path`, `non_empty`), atomic saves |
+| `strata_python.settings` | `Settings` / `Setting` / `ListSetting`: one JSON file in `~/.<app>` with `<APP>_*` environment overrides, validation (`absolute_path`, `non_empty`, `number_between`, `whole_between`, `iso_date`, `boolean`), typed getters, atomic saves, and `bind(store)` to keep them elsewhere (`strata_python.db.settings.TableStore`) |
 | `strata_python.web` | `base_app` (health with the app's own fields + settings routes), `add_web` (built web app or stand-in page at every non-API path), `with_base` (reverse-proxy-safe `<base href>`), `static_file` (path-safe), `serve` |
 | `strata_python.cli` | `add_doctor` (imports, labels, optional modules and the app's own `Check`s), `add_set`, `add_serve` for the app's argparse subcommands |
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
@@ -70,13 +70,15 @@ It runs the lockfile check, ruff, `ruff format`, pyright strict, ty and the unit
 Replace the app's `settings.py` (its key list, getters, file handling and environment lookups) with a declaration:
 
 ```python
-from strata_python.settings import Setting, Settings, absolute_path, non_empty
+from strata_python.settings import ListSetting, Setting, Settings, absolute_path, non_empty, whole_between
 
 SETTINGS = Settings(
     "myapp",  # ~/.myapp/settings.json, moved with MYAPP_HOME
     [
         Setting("data_dir", default=lambda: "/srv/myapp", normalise=absolute_path),
         Setting("greeting", default="Hello", normalise=non_empty),
+        Setting("workers", default="2", normalise=whole_between(1, 16)),
+        ListSetting("source_roots", item=absolute_path, env="MYAPP_SOURCES"),  # MYAPP_SOURCES split on os.pathsep
     ],
     prefix="MYAPP",  # only if the app already runs with other variable names
 )
@@ -86,7 +88,16 @@ SETTINGS.save({"greeting": "Hi"})  # validated and written atomically; None rese
 SETTINGS.folder("data_dir")  # the value as a folder, created if missing
 ```
 
-Values are strings today. An app with int, float or list settings converts at the point of use (`int(SETTINGS.get("workers"))`, `SETTINGS.get("roots").split(os.pathsep)`) until typed settings land here.
+Values are canonical strings, and lists of them. Normalisers for the common kinds give one spelling each: `number_between(lo, hi)`, `whole_between(lo, hi)`, `iso_date(allow_blank=True)` and `boolean`, read back with `get_float`, `get_int` and `get_bool`. A `ListSetting` is a JSON list in the file (a string there is split, so a hand edit works), split on `sep` in the environment (`os.pathsep` by default, `sep=","` for names), with `item` normalising each entry. `get_list` returns it, and `all()` and `GET /api/settings` return it as JSON. `get` and `set` show it joined, and `save` takes a list or a joined string.
+
+To keep the values in the app's database instead of the file, add the table to the models and bind at service start, after the migrations. The file's values are copied in the first time, and the CLI and tests without a database keep using the file:
+
+```python
+from strata_python.db.settings import TableStore, settings_table
+
+SETTINGS_TABLE = settings_table(Base.metadata)        # in models.py, so the migrations create it
+SETTINGS.bind(TableStore(engine, SETTINGS_TABLE))     # any object with load() and update(changes) is a store
+```
 
 ### 4. The server
 
@@ -130,7 +141,9 @@ A doctor that needs more than imports takes labels, optional modules, checks and
 
 ```python
 cli.add_doctor(
-    sub, "myapp", __version__,
+    sub,
+    "myapp",
+    __version__,
     ("fastapi", ("rawpy (DNG decoding)", "rawpy"), cli.Module("ultralytics", optional=True)),
     checks=[cli.Check("ffmpeg", cli.program("ffmpeg", "apt install ffmpeg")), cli.Check("gpu", gpu_check)],
     hint="uv sync (scripts/setup_env)",

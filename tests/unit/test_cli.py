@@ -4,7 +4,7 @@ import sys
 import pytest
 
 from strata_python import cli
-from strata_python.settings import Setting, Settings
+from strata_python.settings import ListSetting, Setting, Settings
 
 
 def build(settings=None, run=None, imports=("json",)):
@@ -103,3 +103,13 @@ def test_serve_passes_host_and_port():
     assert go(p, "serve") == 0
     assert go(p, "serve", "--host", "0.0.0.0", "--port", "9000") == 0
     assert seen == [("127.0.0.1", 8123), ("0.0.0.0", 9000)]
+
+
+def test_set_shows_and_takes_a_list_joined(capsys):
+    s = Settings("demo", [ListSetting("names", default=("a",), sep=",")])
+    p = build(s)
+    go(p, "set", "names")
+    assert capsys.readouterr().out.strip() == "names = a"
+    go(p, "set", "names", "a,b, c")
+    assert capsys.readouterr().out.strip() == "names = a,b,c"
+    assert s.get_list("names") == ["a", "b", "c"]

@@ -6,10 +6,16 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ### Added
 
+- Typed settings: normalisers `number_between(lo, hi)`, `whole_between(lo, hi)`, `iso_date(allow_blank=True)` and `boolean`, and getters `get_int`, `get_float`, `get_bool`. Replace an app's own range and date normalisers and its `int(SETTINGS.get(...))` calls.
+- `ListSetting(key, default=..., item=..., sep=os.pathsep, env=...)`: a list of strings, a JSON list in the file, split on `sep` in the environment, read with `get_list`. `all()`, `GET /api/settings` and `PUT /api/settings` carry it as a JSON list, and `set` shows and takes it joined. An app with a list of folders can now drop its own settings file handling.
+- Settings stores: `Settings(..., store=...)` and `Settings.bind(store)` keep the values in any object with `load()` and `update(changes)`. On the first bind the JSON file's values are copied in once. `strata_python.db.settings` has the table every app shares (`settings_table(Base.metadata)`) and its `TableStore`, on SQLite and Postgres.
+
 - `cli.add_doctor(..., checks=[...], hint="...")`: imports can be `(label, module)` pairs or `cli.Module(label, module, optional=True)`, and `cli.Check(label, fn)` rows (`fn` returns `(status, text)`; `ok`, `missing`, `slow` or `broken`) cover what an import cannot tell, with `cli.program("ffmpeg")` for a program on the PATH. Every app's rows line up the same. `cli.doctor(...)` runs the same thing directly. Replace an app's own `doctor` with these.
 - `web.base_app(..., health=lambda: {...})` adds the app's own fields to `GET /api/health` after `ok` and `version`; it may set `ok` to false. Replace an app's own health route with it.
 
 ### Changed
+
+- `Settings.all()` is typed `dict[str, str | list[str]]`, since a `ListSetting` is a list. It is unchanged for an app with only `Setting`s, but its type checker may now ask it to narrow a value it passes on as a `str`.
 
 - The documented way to declare an app's models base is now the class written out (`class Base(MappedAsDataclass, DeclarativeBase): metadata = MetaData(naming_convention=NAMING_CONVENTION)`, README step 8), because ty rejects `Base = make_base()` as a base class and fails the gate. `make_base()` still works and stays for code that needs a base at run time; an app that uses it for its models should switch.
 

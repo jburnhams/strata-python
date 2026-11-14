@@ -60,11 +60,11 @@ def base_app(
     if settings is not None:
 
         @app.get("/api/settings")
-        def get_settings() -> dict[str, str]:  # pyright: ignore[reportUnusedFunction]
+        def get_settings() -> dict[str, str | list[str]]:  # pyright: ignore[reportUnusedFunction]
             return settings.all()
 
         @app.put("/api/settings")
-        def put_settings(changes: dict[str, str | None]) -> dict[str, str]:  # pyright: ignore[reportUnusedFunction]
+        def put_settings(changes: dict[str, str | list[str] | None]) -> dict[str, str | list[str]]:  # pyright: ignore[reportUnusedFunction]
             try:
                 settings.save(changes)
             except (KeyError, ValueError) as e:

@@ -302,6 +302,46 @@ def test_the_documented_base_passes_both_type_checkers(tmp_path: Path, checker: 
     assert "nmae" in typo.stdout
 
 
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_settings_in_a_table(backend: str, tmp_path: Path, isolated_env: Path):
+    """Issue #16: Settings bound to the database's settings table: the file is copied in once, list values round-trip,
+    None deletes, and saves from two threads at once lose nothing (the upsert, on both backends)."""
+    import threading
+
+    from sqlalchemy import MetaData
+
+    from strata_python.db.settings import TableStore, settings_table
+    from strata_python.settings import IMPORTED, ListSetting, Setting, Settings
+
+    meta = MetaData(naming_convention=db.NAMING_CONVENTION)
+    table = settings_table(meta)
+    keys = [f"k{i}" for i in range(8)]
+    s = Settings(
+        "demo", [Setting("slots", default="2"), ListSetting("roots", sep=","), *(Setting(k, default="") for k in keys)]
+    )
+    s.save({"slots": "3"})
+    with scratch_database(backend == "postgres") as url:
+        eng = scratch_engine(url)
+        meta.create_all(eng)  # a store test, not an app's schema: the table's own DDL is all it needs
+        try:
+            store = TableStore(eng, table)
+            s.bind(store)
+            assert store.load() == {"slots": "3", IMPORTED: s.path()}
+            s.save({"roots": "a,b", "slots": None})
+            assert (s.get_list("roots"), s.get("slots")) == (["a", "b"], "2")
+            threads = [threading.Thread(target=s.save, args=({k: "v"},)) for k in keys]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            assert all(s.get(k) == "v" for k in keys)
+            with eng.begin() as c:
+                c.execute(table.insert().values(key="slots", value="not json"))
+            assert "slots" not in store.load()
+        finally:
+            eng.dispose()
+
+
 def test_init_writes_config(app: Path):
     p = Project.load(app)
     assert p.app.startswith("t")
