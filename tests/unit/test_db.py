@@ -569,7 +569,8 @@ def test_scratch_refuses_a_server_holding_the_shared_database(monkeypatch: pytes
         monkeypatch.setenv("STRATA_DB_DATABASE", shared)
         with pytest.raises(scratch.RealServerRefused):
             scratch.refuse_real_server(admin_url())
-        monkeypatch.setenv("STRATA_DB_TEST_ADMIN_URL", admin_url() + "&application_name=strata")  # not checked yet
+        fresh = admin_url() + ("&" if "?" in admin_url() else "?") + "application_name=strata"  # not checked yet
+        monkeypatch.setenv("STRATA_DB_TEST_ADMIN_URL", fresh)
         with pytest.raises(scratch.RealServerRefused):
             pg_available()
     finally:
@@ -697,8 +698,10 @@ def test_guard_covers_async_connections():
         c.execute(text(f'CREATE DATABASE "{name}"'))
     try:
         url = pg_url(name).replace("postgresql+psycopg", "postgresql")
+        # psycopg's async mode needs a selector loop; Windows defaults to the proactor one
+        loop = {"loop_factory": asyncio.SelectorEventLoop} if os.name == "nt" else {}
         with pytest.raises(guard.LiveDatabaseRefused, match="AsyncConnection"):
-            asyncio.run(psycopg.AsyncConnection.connect(url))
+            asyncio.run(psycopg.AsyncConnection.connect(url), **loop)
 
         async def throwaway() -> str:
             conn = await psycopg.AsyncConnection.connect(admin_url().replace("postgresql+psycopg", "postgresql"))
@@ -706,7 +709,7 @@ def test_guard_covers_async_connections():
             await conn.close()
             return name
 
-        assert asyncio.run(throwaway())  # the admin database is allowed
+        assert asyncio.run(throwaway(), **loop)  # the admin database is allowed
     finally:
         with adm.connect() as c:
             c.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
