@@ -18,6 +18,7 @@ def kinds(findings):
 
 def test_clean_text_has_no_findings():
     text = "Placeholders are fine: /home/ada/myapp, C:\\Users\\user, bot 41898282+bot" + AT + "users.noreply.github.com"
+    text += ", Co-Authored-By: noreply" + AT + "anthropic.com"
     assert list(public_check.scan_text("README.md", text)) == []
 
 
@@ -25,6 +26,8 @@ def test_clean_text_has_no_findings():
     ("text", "kind"),
     [
         (f"contact {EMAIL}", "email address"),
+        ("alice" + AT + "anthropic.com", "email address"),
+        ("noreply" + AT + "github.com", "email address"),
         (f"server at 192{DOT}168{DOT}1{DOT}20", "private IPv4 address"),
         (f"listen on 10{DOT}0{DOT}0{DOT}5:8000", "private IPv4 address"),
         (f"bridge 172{DOT}20{DOT}3{DOT}4", "private IPv4 address"),

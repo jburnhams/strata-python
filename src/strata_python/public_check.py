@@ -26,9 +26,10 @@ DENY_ENV = "STRATA_PUBLIC_DENY"
 PLACEHOLDER_USERS = {"ada", "user", "me", "you", "name", "myapp", "runner"}
 
 BUILT_IN: dict[str, re.Pattern[str]] = {
-    # noreply addresses (git trailers, bots) are not personal
+    # Only the two automated addresses git trailers use are allowed: GitHub's per-user noreply domain and Claude's
+    # co-author address. A whole domain is never exempt (review finding: a personal address there would pass).
     "email address": re.compile(
-        r"\b[A-Za-z0-9._%+-]+@(?!users\.noreply\.github\.com\b|anthropic\.com\b)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b"
+        r"\b(?!noreply@anthropic\.com\b)[A-Za-z0-9._%+-]+@(?!users\.noreply\.github\.com\b)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b"
     ),
     "private IPv4 address": re.compile(r"\b(?:10|192\.168|172\.(?:1[6-9]|2\d|3[01]))(?:\.\d{1,3}){2,3}\b"),
     "home folder path": re.compile(r"(?:/home/|/Users/|[A-Za-z]:\\+Users\\+)(?P<user>[A-Za-z0-9._-]+)"),
