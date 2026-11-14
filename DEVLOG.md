@@ -4,6 +4,13 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**Release workflow: check the token before pushing anything (issue #8; branch `claude/project-thread-vzy9v6`)**
+
+The release after #7 pushed its bump branch and then failed at the first `gh` call with "invalid header field value for Authorization", most likely a trailing newline in the pasted `RELEASE_TOKEN` (git base64-encodes it, `gh` sends it raw). The secret was re-saved and 0.2.1 is on PyPI; this makes a bad token fail first, with a message saying what to fix.
+
+- `.github/workflows/release.yml`: a first step that fails when the secret is empty or holds whitespace, then reads the repository with it. It does not trim the token, as the issue offered: the checkout and release actions take the secret as it is, so a trimmed copy would only move the failure later.
+
+
 **`strata-public-check`: versions are not addresses, and a way to silence what is left (issue #13; branch `claude/project-thread-vzy9v6`)**
 
 An app with a web front end got 28 findings, most of them npm versions (`10.0.0`, `10.4.2`) matched as private IPv4 addresses, because the pattern took two or three parts after the prefix. It also found real home-folder paths in two of that app's files, so the check is worth having there once it is quiet.

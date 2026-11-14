@@ -38,6 +38,23 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
 
     steps:
+      # Fail before anything is pushed if the token cannot be used (issue #8: a pasted token with a trailing newline
+      # passed git, which base64-encodes it, then broke gh, which sends it raw). Trimming it here would not help: the
+      # checkout and release actions below take the secret as it is, so the fix is to re-save it.
+      - name: "Check RELEASE_TOKEN"
+        env:
+          TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TOKEN" ]; then
+            echo "::error::RELEASE_TOKEN is not set (it needs contents and pull-requests write on this repo)"; exit 1
+          fi
+          if [ "$TOKEN" != "$(printf %s "$TOKEN" | tr -d '[:space:]')" ]; then
+            echo "::error::RELEASE_TOKEN contains whitespace (a trailing newline?); save the secret again without it"
+            exit 1
+          fi
+          GH_TOKEN="$TOKEN" gh api "repos/$GITHUB_REPOSITORY" --jq '"release token can read " + .full_name'
+
       # Use the latest main, not just the commit whose CI finished: if more PRs
       # landed meanwhile, the bump must account for every commit it releases.
       # Their own CI runs will then find nothing new to release.
