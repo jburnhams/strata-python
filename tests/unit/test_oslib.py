@@ -200,9 +200,10 @@ def test_stdout_to_stderr_moves_what_the_process_and_its_tools_print():
     assert p.stdout is not None
     assert p.stdin is not None
     answer = p.stdout.readline()  # its stdin stays open meanwhile, so the reader thread is blocked on it
-    p.stdin.close()
-    out, err = p.communicate(timeout=60)
-    assert p.returncode == 0, err
+    p.stdin.close()  # (communicate() would flush the closed stdin and fail on 3.11 and 3.12)
+    assert p.stderr is not None
+    out, err = p.stdout.read(), p.stderr.read()
+    assert p.wait(60) == 0, err
     assert answer + out == "the answer\n"
     assert "from me" in err
     assert "from a tool, stdin ''" in err
