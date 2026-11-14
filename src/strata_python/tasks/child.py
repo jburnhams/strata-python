@@ -38,6 +38,9 @@ from strata_python.tasks.progress import ProgressReporter, reporting
 from strata_python.tasks.retry import RetryLater
 
 ENV = "STRATA_JOB"
+# Starts every answer. On Windows a tool the handler starts inherits the process's real stdout handle (moving fd 1
+# does not move it), so other lines can reach the parent on the same pipe: those go on to the log.
+MARK = "\x02strata-job:"  # not \x1c-\x1e: str.splitlines breaks lines there
 Json = dict[str, Any]
 
 
@@ -96,6 +99,15 @@ def rebuild_error(d: Json) -> BaseException:
     return RuntimeError(message)  # pragma: no cover - RuntimeError's subclass always takes a message
 
 
+def route(line: str, answers: queue_mod.Queue[str | None], log: IO[str]) -> None:
+    """An answer to `answers`; anything else on the pipe (a tool's output) to `log`."""
+    if line.startswith(MARK):
+        answers.put(line[len(MARK) :])
+    else:
+        log.write(line)
+        log.flush()
+
+
 def run_one(queue: Any, cmd: Json, handlers: dict[str, Any]) -> Json:
     """Run the attempt `cmd` names and say what happened. `handlers` caches the imported functions."""
     job = queue.get(int(cmd["id"]))
@@ -146,7 +158,7 @@ def main(
     handlers: dict[str, Any] = {}
     try:
         while (line := inbox.get()) is not None:
-            replies.write(json.dumps(run_one(queue, cast("Json", json.loads(line)), handlers)) + "\n")
+            replies.write(MARK + json.dumps(run_one(queue, cast("Json", json.loads(line)), handlers)) + "\n")
             replies.flush()
     finally:
         engine.dispose()
@@ -180,7 +192,7 @@ class JobProcess:
 
         def read() -> None:
             for line in out:
-                answers.put(line)
+                route(line, answers, sys.stderr)
             answers.put(None)
 
         threading.Thread(target=read, name="strata-job-answers", daemon=True).start()

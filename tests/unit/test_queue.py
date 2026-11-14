@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import queue as queue_mod
 import threading
 import time
 from collections.abc import Iterator
@@ -434,7 +435,9 @@ def test_child_main_runs_the_named_attempts_and_skips_a_replaced_one(setup, monk
     replies = io.StringIO()
     assert child.main(io.StringIO("".join(json.dumps(c) + "\n" for c in cmds)), replies, eof.set) == 0
     assert eof.wait(5)
-    assert [json.loads(line) for line in replies.getvalue().splitlines()] == [
+    lines = replies.getvalue().splitlines()
+    assert all(line.startswith(child.MARK) for line in lines)
+    assert [json.loads(line[len(child.MARK) :]) for line in lines] == [
         {"ok": True, "result": {"n": 2, "pid": os.getpid()}},
         {"gone": True},
         {"ok": False, "type": "TypeError", "base": "TypeError", "message": "a bug"},
@@ -488,6 +491,17 @@ def test_max_jobs_replaces_a_process_after_that_many(setup):
         w.stop(timeout=20)
     got = [q.get(i).result for i in ids]
     assert got[0] == got[1] != got[2] == got[3] != got[4]
+
+
+def test_only_marked_lines_are_answers_the_rest_goes_to_the_log():
+    """On Windows a tool's output can reach the answer pipe (it inherits the real stdout handle): CI caught it."""
+    answers: queue_mod.Queue[str | None] = queue_mod.Queue()
+    logged = io.StringIO()
+    child.route("a line from a tool\n", answers, logged)
+    child.route(child.MARK + '{"ok": true}\n', answers, logged)
+    assert logged.getvalue() == "a line from a tool\n"
+    assert answers.get_nowait() == '{"ok": true}\n'
+    assert answers.empty()
 
 
 def test_rebuilt_errors_keep_their_class_and_name():

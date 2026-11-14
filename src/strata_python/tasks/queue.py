@@ -52,6 +52,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import os
 import socket
 import threading
@@ -90,6 +91,7 @@ from strata_python.tasks.retry import Decision, next_state
 ACTIVE = ("queued", "running")
 Json = dict[str, Any]
 Handler = Callable[["Job"], Any]
+log = logging.getLogger(__name__)
 
 
 class WorkerLost(RuntimeError):
@@ -645,6 +647,12 @@ class Worker:
                     self._run_isolated(job, slot)
                 else:
                     self.queue.run(job, self.handlers[job.kind])
+            except Exception as e:  # the worker's own failure (a lost database, a bad answer): fail the job, go on
+                log.exception("job %s (%s) could not be run", job.id, job.kind)
+                with contextlib.suppress(Exception):
+                    self.queue.fail(job, e)
+                if slot is not None:
+                    slot.close()
             finally:
                 with self._lock:
                     self._running.pop(job.id, None)
