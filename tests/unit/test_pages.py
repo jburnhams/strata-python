@@ -229,6 +229,6 @@ def test_words_placed_by_a_font_matcher_are_set_where_they_were_measured():
         699, 704
     )  # not right after "Punch ": where it was measured
     assert read_text(pdf).replace(" ", "") == "PunchJudy"
-    heavy = ink(rasterise(render(one_line(Span("l", size_pt=20, weight_delta=0.05)), fit=False)))
+    heavy = ink(rasterise(render(one_line(Span("l", size_pt=20, stroke_em=0.05)), fit=False)))
     thin = ink(rasterise(render(one_line(Span("l", size_pt=20)), fit=False)))
     assert heavy[2] - heavy[0] > thin[2] - thin[0]

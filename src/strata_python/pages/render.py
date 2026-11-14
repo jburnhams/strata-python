@@ -8,7 +8,7 @@ What the renderer does with a description, so a reader knows what to give it:
 - Each line is set on its baseline, from the left of its box (centred or right-aligned in the box for a block aligned
   so), span after span. Blocks are drawn in reading order, so the PDF's text reads back in that order.
 - A span's size is its `size_pt`, else its line's, else `SIZE_OF_BOX` times the line box's height.
-- `tracking_em`, `hscale` and `weight_delta` (a stroke round the glyphs) are applied as given, and a span's own `x`
+- `tracking_em`, `hscale` and `stroke_em` (a stroke round the glyphs) are applied as given, and a span's own `x`
   and `baseline_y` (a font matcher's per-word fit) place it; a line with placed spans is not fitted again. With `fit` (the default) the glyph spacing of the line is then
   nudged, by at most `FIT_LIMIT_EM` a glyph, so the line fills its box: a near face then lands where the print was
   without the glyphs themselves being stretched.
@@ -111,7 +111,7 @@ def _runs(line: Line, fonts: _Fonts, default_size: float) -> list[_Run]:
     for span in line.spans:
         size = span.size_pt or line.size_pt or default_size
         font = fonts.name(span, line)
-        track, weight = span.tracking_em * size, max(span.weight_delta, 0.0) * size
+        track, weight = span.tracking_em * size, max(span.stroke_em, 0.0) * size
         text = span.text.upper() if span.style == "caps" else span.text
         if span.style != "small-caps" or fonts.is_small_caps_cut(span, line):
             out.append(_Run(text, font, size, span.hscale, track, weight, span.x, span.baseline_y))
