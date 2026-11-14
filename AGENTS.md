@@ -21,12 +21,13 @@ The shared Python server code for the strata apps: the modules every app copied 
 - **Opinionated, for the strata apps.** This is not a general-purpose library: it is built for the strata apps and should cater for them directly. A module belongs here when two or more apps need the same thing, or when it is a strata service's contract and client (the shapes a service's endpoints return and the typed client every app gets for free). Each app should be a thin layer of plumbing and business logic over what lives here. Naming a strata app or service is fine; naming a machine or a person is not (rule 4). Behaviour that differs per app is still passed in (a `Settings` declaration, an import list, a `run` callback), never configured by editing this package.
 - **Backward compatibility matters**: apps depend on a version range (`strata-python>=0.2,<0.3`) and upgrade deliberately. Breaking a public name, a function signature or a fixture needs a major (or, while 0.x, a minor) version bump, a `### Breaking` line in CHANGELOG.md that ends with the migration in one sentence. The version lives only in `pyproject.toml`.
 - **Windows is supported**: OS differences live in `oslib`; do not import `fcntl` or call `os.kill(pid, 0)` elsewhere. Windows-only branches (`if WIN:`) are excluded from the coverage number but run on the Windows CI leg.
-- **The pytest plugin changes every app's tests**: its autouse fixtures must stay cheap and safe to have installed (`isolated_env` only touches the app prefix when `strata_env_prefix` is set). This repo loads the plugin from `tests/conftest.py` and disables the entry point (`-p no:strata_python`) so coverage sees its lines.
+- **The pytest plugin changes every app's tests**: its autouse fixtures must stay cheap and safe to have installed (`isolated_env` only touches the app prefix when `strata_env_prefix` is set). This repo loads both plugins from `tests/conftest.py` and disables their entry points (`-p no:strata_python -p no:strata_python_db`) so coverage sees their lines. The db plugin is registered in every app: without the db extra it must import nothing beyond the standard library and pytest. With the extra it imports the installed Postgres drivers as it loads, on purpose: the guard has to wrap them before conftest.py and the app's modules can open a connection, so it cannot wait for a fixture. SQLAlchemy and Alembic still load only when a fixture runs.
 
 ## Testing policy
 
 Prefer real code over mocks. A test that runs the real thing finds the bugs that matter; a mock only proves the code agrees with the test.
 
+- Real databases: SQLite files and a throwaway Postgres (the private test server; CI sets `STRATA_TEST_PG=1` so a missing server fails instead of skipping).
 - Real HTTP requests against real servers (`live_app`, `http_server`), real subprocesses (`kill_tree`, `file_lock` across processes, `serve`, the `strata-check` gate on a tiny project), real files in `tmp_path`.
 - Mocks only for a true external, in quick unit tests, and never for this package's own modules. The apps' fakes for those edges (`strata_python.testing`, exposed as the plugin's `fake_*` fixtures) live here so every app uses the same ones; they are tested here against real `urllib` and `subprocess` calls. The one stdlib patch here is `importlib.metadata.version` (the uninstalled-source-tree fallback).
 - No silent skips and no swallowed errors; `pytest.importorskip` is banned (ruff). A deliberate skip is a marker or `skipif` with a reason and an explicit switch; any new skip is mentioned in the PR.
@@ -36,6 +37,7 @@ Prefer real code over mocks. A test that runs the real thing finds the bugs that
 
 ```
 src/strata_python/   oslib, settings, web, cli, http_server, live, testing, pytest_plugin, check, public_check; py.typed
+  db/                the [db] extra: config, guard, engine, models, project, migrations, scratch, testserver, testing, cli, pytest_plugin, _alembic/
 tests/unit/          one test module per module; tests/conftest.py loads the plugin and holds the tiny_project fixture
 tests/integration/   the gate on a tiny project; serve in a separate process
 scripts/check        the gate (uv run --locked strata-check)

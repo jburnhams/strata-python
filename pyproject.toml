@@ -47,6 +47,14 @@ dev = [
     "ruff>=0.17,<0.18",
     "ty>=0.0.99,<0.1",
 ]
+# strata_python.db: SQLAlchemy models, Alembic migrations, the live-database guard and the SQLite/Postgres test
+# fixtures. psycopg's binary wheel is included so an app on the shared Postgres needs nothing else; an app that only
+# uses SQLite pays a wheel download, not a build.
+db = [
+    "sqlalchemy>=2.0,<3",
+    "alembic>=1.13,<2",
+    "psycopg[binary]>=3.2,<4",
+]
 
 [project.urls]
 Homepage = "https://github.com/jburnhams/strata-python"
@@ -56,12 +64,14 @@ Changelog = "https://github.com/jburnhams/strata-python/blob/main/CHANGELOG.md"
 [project.scripts]
 strata-check = "strata_python.check:main"
 strata-public-check = "strata_python.public_check:main"
+strata-db = "strata_python.db.cli:main"
 
 [project.entry-points.pytest11]
 strata_python = "strata_python.pytest_plugin"
+strata_python_db = "strata_python.db.pytest_plugin"   # inert unless the db extra is installed
 
 [dependency-groups]
-dev = ["strata-python[dev]"]   # the same tools the apps get
+dev = ["strata-python[dev,db]"]   # the same tools the apps get, and the db extra so its tests run
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/strata_python"]
@@ -74,13 +84,14 @@ include = ["src", "tests", "README.md", "CHANGELOG.md", "LICENSE", "pyproject.to
 [tool.pytest.ini_options]
 testpaths = ["tests/unit"]
 # The plugin is loaded by tests/conftest.py, not its entry point: pytest imports entry-point plugins before coverage starts, which would hide their lines from the report
-addopts = "-ra --timeout=300 --strict-markers --strict-config -p pytester -p no:strata_python"
+addopts = "-ra --timeout=300 --strict-markers --strict-config -p pytester -p no:strata_python -p no:strata_python_db"
 strata_env_prefix = "DEMO"
 strata_tuning_vars = ["DEMO_TUNE"]
 markers = ["integration: runs a real server or subprocess end-to-end (tests/integration)"]
 
 [tool.coverage.run]
 source = ["src/strata_python"]
+omit = ["*/__main__.py"]   # two lines that call main(); tests/integration runs them as `python -m`
 branch = true
 
 [tool.coverage.report]
@@ -101,7 +112,7 @@ ignore = ["E501"]        # the formatter wraps code; long comments and docstring
 "pytest.importorskip".msg = "Do not skip when a dependency is missing: install it (locally and in CI) and let the test fail if it is not there. A deliberate skip is a marker with a reason, see AGENTS.md (Testing)."
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S310", "S104", "S105", "S106", "S108", "S603", "S607"]    # asserts, urlopen of our own loopback servers, fake secrets, tmp paths, subprocess of our own code
+"tests/**" = ["S101", "S310", "S104", "S105", "S106", "S108", "S603", "S607", "S608"]    # asserts, urlopen of our own loopback servers, fake secrets, tmp paths, subprocess of our own code, SQL naming generated test schemas
 
 [tool.pyright]
 include = ["src"]
