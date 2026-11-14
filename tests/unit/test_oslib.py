@@ -1,6 +1,9 @@
+import shutil
 import subprocess
 import sys
 import time
+
+import pytest
 
 from strata_python import oslib
 
@@ -74,6 +77,43 @@ def test_lower_priority_does_not_raise():
     assert (
         subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.strip() == "ok"
     )
+
+
+LINUX_IONICE = sys.platform.startswith("linux") and shutil.which("ionice") is not None
+
+
+@pytest.mark.skipif(not LINUX_IONICE, reason="Linux, with ionice to read it back")
+@pytest.mark.parametrize("syscall", [True, False])
+def test_lower_io_priority_puts_a_process_in_the_idle_io_class(syscall, monkeypatch):
+    """Issue #12: once through the syscall and once through the ionice fallback (an architecture the table does not
+    know). Aimed at a child process, so this test process keeps its priority; read back with ionice."""
+    reader = shutil.which("ionice")
+    assert reader is not None
+    if syscall:
+        monkeypatch.setattr(shutil, "which", lambda *a, **k: None)  # so a silent fallback cannot pass for the syscall
+    else:
+        monkeypatch.setattr(oslib, "_IOPRIO_SET", {})
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        oslib._lower_io_priority(child.pid)
+        out = subprocess.run([reader, "-p", str(child.pid)], capture_output=True, text=True, check=True).stdout
+        assert out.strip() == "idle"
+    finally:
+        child.kill()
+        child.wait()
+
+
+@pytest.mark.skipif(not LINUX_IONICE, reason="Linux, with ionice to read it back")
+def test_lower_priority_io_in_a_child_reaches_its_children():
+    """The public call, in a child so this test process keeps its priority; the child's own child inherits it."""
+    code = (
+        "import subprocess\n"
+        "from strata_python import oslib\n"
+        "oslib.lower_priority(io=True)\n"
+        "print(subprocess.run(['ionice'], capture_output=True, text=True, check=True).stdout.strip())\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.strip()
+    assert out == "idle"
 
 
 def test_lower_priority_in_this_process_with_no_change():

@@ -93,18 +93,57 @@ def kill_tree(pid: int | str, sig: int = 15) -> None:
         os.kill(int(pid), sig)
 
 
-def lower_priority(nice: int = 19) -> None:
-    """Run this process at lower CPU priority (nice value on POSIX, below-normal/idle class on Windows). Children inherit it."""
+# ioprio_set's syscall number per Linux architecture (Python has no wrapper). Elsewhere `ionice` does the same.
+_IOPRIO_SET = {"x86_64": 251, "aarch64": 30, "riscv64": 30, "i686": 289, "i386": 289, "armv7l": 314, "ppc64le": 273}
+_IOPRIO_IDLE = 3 << 13  # IOPRIO_CLASS_IDLE in the top bits of the priority value; idle has no level
+MAC = sys.platform == "darwin"
+
+
+def lower_priority(nice: int = 19, io: bool = False) -> None:
+    """Run this process at lower CPU priority (nice value on POSIX, below-normal/idle class on Windows). Children
+    inherit it. Best effort: a refusal is skipped.
+
+    `io=True` also lowers its disk priority, for batch jobs that read many large files (hashing an archive, exiftool
+    over a folder) and should not slow interactive use of the same disk: the idle I/O class on Linux (children
+    inherit it), background mode on Windows (CPU and I/O; this process only, Windows does not pass it on), I/O
+    throttling on macOS (this process)."""
     if WIN:
         import ctypes
 
         with contextlib.suppress(Exception):
-            ctypes.windll.kernel32.SetPriorityClass(
-                ctypes.windll.kernel32.GetCurrentProcess(), 0x40 if nice >= 15 else 0x4000
-            )  # IDLE / BELOW_NORMAL
+            k32 = ctypes.windll.kernel32
+            k32.SetPriorityClass(k32.GetCurrentProcess(), 0x40 if nice >= 15 else 0x4000)  # IDLE / BELOW_NORMAL
+            if io:
+                k32.SetPriorityClass(k32.GetCurrentProcess(), 0x00100000)  # PROCESS_MODE_BACKGROUND_BEGIN
         return
     with contextlib.suppress(OSError, AttributeError):
         os.nice(nice)
+    if io:
+        _lower_io_priority()
+
+
+def _lower_io_priority(pid: int = 0) -> None:
+    """Idle I/O for `pid` (0: this process). Other pids are for the tests, which must not lower their own."""
+    import ctypes
+    import ctypes.util
+    import platform
+    import shutil
+
+    if MAC:  # pragma: no cover - the Linux leg runs the tests that count; macOS is best effort
+        with contextlib.suppress(Exception):
+            libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+            libc.setiopolicy_np(0, 0, 3)  # IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_THROTTLE
+        return
+    number = _IOPRIO_SET.get(platform.machine()) if sys.platform.startswith("linux") else None
+    if number is not None:
+        with contextlib.suppress(Exception):
+            libc = ctypes.CDLL(None, use_errno=True)
+            if libc.syscall(number, 1, pid, _IOPRIO_IDLE) == 0:  # IOPRIO_WHO_PROCESS
+                return
+    ionice = shutil.which("ionice")
+    if ionice:  # another architecture or a refused syscall: util-linux's ionice does the same for our pid
+        with contextlib.suppress(OSError):
+            subprocess.run([ionice, "-c3", "-p", str(pid or os.getpid())], capture_output=True, check=False)  # noqa: S603 (ionice from PATH, our pid)
 
 
 def venv_python(venv: str) -> str:

@@ -4,6 +4,15 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**`oslib.lower_priority(io=True)` (issue #12; branch `claude/project-thread-vzy9v6`)**
+
+Three strata-stills scripts each carry `os.nice(15)` plus `ionice -c3 -p <pid>`; it moved the CPU half to `lower_priority` and kept the I/O half, which belongs here.
+
+- `src/strata_python/oslib.py`: `io=True` calls `ioprio_set` (idle class) through `ctypes` on the Linux architectures in a small syscall table, falling back to `ionice` elsewhere or when refused; `PROCESS_MODE_BACKGROUND_BEGIN` on Windows (this process only: Windows does not pass background mode on); `setiopolicy_np` throttling on macOS, excluded from coverage since no CI leg counts it. All best effort, as the CPU part was.
+- `tests/unit/test_oslib.py`: each path aimed at a child process (the internal helper takes a pid, so the test process keeps its own priority) and read back with `ionice`, the syscall path with `ionice` hidden so a fallback cannot pass for it; and the public call in a child, whose own child inherits the class. They failed before the change.
+- `README.md` (step for `oslib`), `CHANGELOG.md`.
+
+
 **Release workflow: check the token before pushing anything (issue #8; branch `claude/project-thread-vzy9v6`)**
 
 The release after #7 pushed its bump branch and then failed at the first `gh` call with "invalid header field value for Authorization", most likely a trailing newline in the pasted `RELEASE_TOKEN` (git base64-encodes it, `gh` sends it raw). The secret was re-saved and 0.2.1 is on PyPI; this makes a bad token fail first, with a message saying what to fix.

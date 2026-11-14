@@ -128,7 +128,7 @@ Delete the hand-written `doctor`, `set` and `serve` subparsers. Each app's port 
 
 ### 6. OS helpers
 
-Delete the app's `oslib.py` and import from `strata_python.oslib`: `file_lock(f)`, `pid_alive(pid)`, `kill_tree(pid, sig)`, `lower_priority(nice)`, `venv_python(venv)` and `cli_command(module)`. `cli_command` now takes the module name (`cli_command("myapp")`). Local `alive(pid)`, `_alive` and `lower_priority()` copies go too. Helpers this library does not have yet (process-group supervision, load average) stay in the app until they move here, and the app's file says so.
+Delete the app's `oslib.py` and import from `strata_python.oslib`: `file_lock(f)`, `pid_alive(pid)`, `kill_tree(pid, sig)`, `lower_priority(nice, io=False)` (`io=True` for idle disk priority too; drop the app's `ionice` helper), `venv_python(venv)` and `cli_command(module)`. `cli_command` now takes the module name (`cli_command("myapp")`). Local `alive(pid)`, `_alive` and `lower_priority()` copies go too. Helpers this library does not have yet (process-group supervision, load average) stay in the app until they move here, and the app's file says so.
 
 ### 7. Tests
 
