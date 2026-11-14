@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "strata-python"
-version = "0.2.0"        # the single source of truth: `strata_python.__version__` reads it back with importlib.metadata
+version = "0.2.1"        # the single source of truth: `strata_python.__version__` reads it back with importlib.metadata
 description = "Common code for Python web server apps: OS helpers, settings, FastAPI serving, CLI commands, test fixtures and the strata-check gate"
 readme = "README.md"
 requires-python = ">=3.11"
