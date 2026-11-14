@@ -4,6 +4,15 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**`strata-public-check`: versions are not addresses, and a way to silence what is left (issue #13; branch `claude/project-thread-vzy9v6`)**
+
+An app with a web front end got 28 findings, most of them npm versions (`10.0.0`, `10.4.2`) matched as private IPv4 addresses, because the pattern took two or three parts after the prefix. It also found real home-folder paths in two of that app's files, so the check is worth having there once it is quiet.
+
+- `src/strata_python/public_check.py`: the address pattern takes exactly four parts and not inside a longer run of digits and dots; `exclude` globs from `[tool.strata-public-check]` in ./pyproject.toml and `--exclude`, matched against a path or its end (an sdist's member path carries the sdist's folder); `strata-public-check: ignore` on a line skips the built-in patterns there. Both deliberately leave the owner's `STRATA_PUBLIC_DENY` patterns alone: they live in a secret, and an exception for one would have to be written in the public repo.
+- `tests/unit/test_public_check.py`: versions and longer dotted numbers, an address before a full stop, the ignore marker (and that it does not cover deny patterns), excludes from pyproject.toml, the command line and inside an sdist.
+- `README.md` (the module table), `CHANGELOG.md`.
+
+
 **The db pytest plugin switches on only for apps that use it, and its `--pg` no longer clashes (issues #11, #19; branch `claude/project-thread-vzy9v6`)**
 
 Two apps reported that with 0.2.1 installed pytest would not start when the old database package was installed too: both plugins add `--pg`, and a second `addoption` for a name raises. The plugin also switched its guard on whenever SQLAlchemy and Alembic were importable, which refuses the old package's throwaway databases in the same run. So an app could not take 0.2.x first and move its database later, the order README step 8 suggests.

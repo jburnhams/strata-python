@@ -5,6 +5,14 @@ release workflow scans the built sdist and wheel (and CI scans the tree) before 
 catch what is personal in any repo: email addresses, private IPv4 addresses and home-folder paths. Names that are
 personal to one owner (a person, a host name, a port map) cannot be listed here without publishing them, so they come
 from the `STRATA_PUBLIC_DENY` environment variable (one case-insensitive regex per line), which CI fills from a secret.
+
+False positives left after that are silenced in the repo, where a reviewer sees them:
+
+- `[tool.strata-public-check] exclude = ["web/package-lock.json"]` in pyproject.toml (or `--exclude`): glob patterns
+  matched against each file's path in the folder or archive, or any trailing part of it (so an sdist's
+  `pkg-1.0/web/package-lock.json` matches too).
+- `strata-public-check: ignore` anywhere on a line skips the built-in patterns on that line. Never the owner's
+  `STRATA_PUBLIC_DENY` patterns: a name the owner listed is never one to publish.
 """
 
 from __future__ import annotations
@@ -15,12 +23,17 @@ import os
 import re
 import sys
 import tarfile
+import tomllib
 import zipfile
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path
+from typing import Any, cast
 
 DENY_ENV = "STRATA_PUBLIC_DENY"
+TABLE = "strata-public-check"
+IGNORE = "strata-public-check: ignore"
 
 # Placeholders the docs use on purpose (AGENTS.md: examples use /home/ada/..., myapp).
 PLACEHOLDER_USERS = {"ada", "user", "me", "you", "name", "myapp", "runner"}
@@ -31,7 +44,11 @@ BUILT_IN: dict[str, re.Pattern[str]] = {
     "email address": re.compile(
         r"\b(?!noreply@anthropic\.com\b)[A-Za-z0-9._%+-]+@(?!users\.noreply\.github\.com\b)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b"
     ),
-    "private IPv4 address": re.compile(r"\b(?:10|192\.168|172\.(?:1[6-9]|2\d|3[01]))(?:\.\d{1,3}){2,3}\b"),
+    # A whole dotted quad and nothing more: a three-part version (`10.4.2` in package.json, issue #13) or a longer
+    # dotted number is not an address. The lookarounds stop a match inside a longer run of digits and dots.
+    "private IPv4 address": re.compile(
+        r"(?<![\w.])(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})(?!\.?\d)"
+    ),
     "home folder path": re.compile(r"(?:/home/|/Users/|[A-Za-z]:\\+Users\\+)(?P<user>[A-Za-z0-9._-]+)"),
 }
 
@@ -65,7 +82,7 @@ def deny_patterns(env: str | None = None) -> list[re.Pattern[str]]:
 def scan_text(where: str, text: str, extra: Iterable[re.Pattern[str]] = ()) -> Iterator[Finding]:
     extra = list(extra)
     for number, line in enumerate(text.splitlines(), 1):
-        for kind, pattern in BUILT_IN.items():
+        for kind, pattern in BUILT_IN.items() if IGNORE not in line else ():
             for match in pattern.finditer(line):
                 if kind == "home folder path" and match.group("user").lower() in PLACEHOLDER_USERS:
                     continue
@@ -74,6 +91,20 @@ def scan_text(where: str, text: str, extra: Iterable[re.Pattern[str]] = ()) -> I
             # The match itself is not printed: the log of a public repo's CI is public too.
             if pattern.search(line):
                 yield Finding(where, number, f"matches {DENY_ENV} pattern", "(hidden)")
+
+
+def excluded(name: str, patterns: Iterable[str]) -> bool:
+    """Whether a path (posix, relative to its folder or archive) matches an exclude pattern, whole or at its end."""
+    return any(fnmatchcase(name, p) or fnmatchcase(name, "*/" + p) for p in patterns)
+
+
+def config_excludes(root: Path | None = None) -> list[str]:
+    """`exclude` from `[tool.strata-public-check]` in root's (default: the current folder's) pyproject.toml."""
+    f = (root or Path()) / "pyproject.toml"
+    if not f.is_file():
+        return []
+    tool = cast("dict[str, Any]", tomllib.loads(f.read_text(encoding="utf-8")).get("tool", {}))
+    return [str(p) for p in cast("dict[str, Any]", tool.get(TABLE, {})).get("exclude", [])]
 
 
 def _is_text(name: str) -> bool:
@@ -103,12 +134,14 @@ def _members(path: Path) -> Iterator[tuple[str, bytes]]:
         yield path.as_posix(), path.read_bytes()
 
 
-def scan(paths: Iterable[Path], extra: Iterable[re.Pattern[str]] = ()) -> list[Finding]:
-    """Every finding in the given folders, files, sdists (.tar.gz) and wheels (.whl)."""
-    extra = list(extra)
+def scan(paths: Iterable[Path], extra: Iterable[re.Pattern[str]] = (), exclude: Iterable[str] = ()) -> list[Finding]:
+    """Every finding in the given folders, files, sdists (.tar.gz) and wheels (.whl), less the excluded files."""
+    extra, exclude = list(extra), list(exclude)
     findings: list[Finding] = []
     for path in paths:
         for where, data in _members(path):
+            if excluded(where, exclude):
+                continue
             text = io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="replace").read()
             findings.extend(scan_text(where, text, extra))
     return findings
@@ -119,8 +152,15 @@ def main(argv: list[str] | None = None) -> int:
         prog="strata-public-check", description="Refuse to publish personal or machine-specific details."
     )
     parser.add_argument("paths", nargs="*", type=Path, default=[Path()], help="folders, files, sdists or wheels")
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help=f"skip matching files, as well as [tool.{TABLE}] exclude in ./pyproject.toml",
+    )
     args = parser.parse_args(argv)
-    findings = scan(args.paths, deny_patterns())
+    findings = scan(args.paths, deny_patterns(), [*config_excludes(), *args.exclude])
     for finding in findings:
         print(finding, file=sys.stderr)
     if findings:
