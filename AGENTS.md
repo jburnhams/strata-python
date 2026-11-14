@@ -36,7 +36,8 @@ Prefer real code over mocks. A test that runs the real thing finds the bugs that
 ## Layout
 
 ```
-src/strata_python/   oslib, settings, web, cli, http_server, live, testing, pytest_plugin, check, public_check; py.typed
+src/strata_python/   oslib, settings, web, cli, contracts, client, http_server, live, testing, pytest_plugin, check, public_check; py.typed
+  tasks/             retry, progress, flight (SingleFlight), status (StatusFile, Detached), ticker; queue (the [db] extra)
   clients/           one typed, standard-library-only client per strata service: models (strata-models)
   db/                the [db] extra: config, guard, engine, models, project, migrations, scratch, settings, testserver, testing, cli, pytest_plugin, _alembic/
   pages/             model (the page description, plain data) and render (the [pdf] extra: ReportLab writes, pdfium reads back)

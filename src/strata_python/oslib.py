@@ -154,3 +154,20 @@ def venv_python(venv: str) -> str:
 def cli_command(module: str) -> list[str]:
     """Command prefix that runs `module` (`python -m <module>`) with the interpreter running this process: works on POSIX and Windows, with or without a venv, and does not touch the environment."""
     return [sys.executable, "-m", module]
+
+
+def detached_kwargs() -> dict[str, Any]:
+    """`subprocess.Popen` keyword arguments that start a process outside this one's session (POSIX) or console and
+    process group (Windows), so it keeps running when the server that started it restarts, and a Ctrl+C or a stopped
+    service unit aimed at the server does not reach it. `kill_tree` still stops it and its children."""
+    if WIN:
+        return {"creationflags": 0x00000200 | 0x00000008}  # CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+    return {"start_new_session": True}
+
+
+def load_average() -> tuple[float, float, float] | None:
+    """The 1, 5 and 15 minute load averages, or None where the OS has none (Windows)."""
+    try:
+        return os.getloadavg()
+    except (AttributeError, OSError):
+        return None

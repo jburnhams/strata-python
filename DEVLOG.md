@@ -4,6 +4,21 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**Contracts, a service client base, web extras and the task primitives (branch `claude/project-thread-aefumh`)**
+
+The owner asked for the rest of the library work in the move-out plan while the apps move onto 0.2.x. These are its steps 3 to 5 (web extras, contracts and `ServiceClient`, task primitives), designed from the survey's notes on each app's copy. The models client stays standard library only and keeps its own calls (decided earlier today); only its `Unavailable` now subclasses the shared one, so `add_error_handlers` answers it as 503.
+
+- `src/strata_python/contracts.py` **new**: `Health`, `SystemInfo`, `Folder`, `ServiceStatus`, `ErrorBody`, `Task`, `TaskState`, `FINISHED`, `Progress`, `Page[T]` (written with `Generic[T]`, since 3.11 is supported), `FileRef`, `Judgment`, `utc`.
+- `src/strata_python/client.py` **new**: `ServiceClient`, `Rejected`, `Unavailable`, `env_url`. Only idempotent methods retry, because a retried POST can submit a job twice.
+- `src/strata_python/web.py`: `add_error_handlers` and `DEFAULT_ERRORS`, `add_system`, `source_commit`, `base_app(commit=)`, and the settings routes declare `Settings.model()` as their response. The PUT body stays an untyped dict on purpose: a typed body would answer an unknown key with 422 instead of the 400 apps and their tests expect.
+- `src/strata_python/settings.py`: `Settings.model()` (pydantic imported inside it, so the CLI's settings reads stay light).
+- `src/strata_python/tasks/` **new**: `retry.py` (after strata-360's `pipeline/retry.py` as the survey describes it: programming errors fail at once, progress resets the count, `RetryLater` names its pause), `progress.py`, `flight.py` (`SingleFlight`, `Flight`, `Conflict`), `status.py` (`StatusFile`, `Detached`, `write_json_atomic`; `Detached` reaps its own exited child, since a zombie still passes `pid_alive`), `ticker.py`, `__init__.py`.
+- `src/strata_python/oslib.py`: `detached_kwargs`, `load_average`. listory's process-group supervisor is not here yet: its code was not read in this pass.
+- `src/strata_python/clients/models.py`: `Unavailable` subclasses `client.Unavailable`.
+- `tests/unit/test_contracts.py`, `tests/unit/test_client.py`, `tests/unit/test_tasks.py` **new**; `tests/unit/test_web.py` (error bodies, `/api/system` with a real service up, one down and one not ok, `source_commit` on a made-up checkout and worktree, the settings schema in OpenAPI), `tests/unit/test_oslib.py`. All over real HTTP, real threads, real files and real child processes.
+- `README.md` (module table, step 4, step 6, new step 6b), `AGENTS.md` (layout), `src/strata_python/__init__.py`, `CHANGELOG.md`.
+
+
 **A stand-in strata-models for the apps' tests (branch `claude/project-thread-aefumh`)**
 
 The move-out plan's next step for the models client: every app that calls strata-models would otherwise write its own fake service or mock the client. The stand-in that tested the client here becomes public, so apps test their own calls against the same service steps over real HTTP.

@@ -150,3 +150,129 @@ def test_list_settings_over_real_http(live_app, tmp_path):
         status, text = put(base + "/api/settings", {"source_roots": ["relative"]})
         assert status == 400
         assert "absolute" in text
+
+
+def test_error_handlers_answer_the_apps_exceptions_as_error_bodies(live_app):
+    from strata_python.client import Unavailable
+    from strata_python.tasks import Conflict
+
+    class Busy(RuntimeError):
+        def __init__(self, msg):
+            super().__init__(msg)
+            self.payload = {"queue": 3}
+
+    app = web.base_app("demo", "1")
+    web.add_error_handlers(app, {Busy: 429})
+    raises = {
+        "value": ValueError("page must be a number"),
+        "key": KeyError("book 7"),
+        "missing": FileNotFoundError("cover.jpg"),
+        "conflict": Conflict("scan is already running", {"key": "a"}),
+        "down": Unavailable("strata-models is not reachable"),
+        "busy": Busy("try later"),
+    }
+
+    @app.get("/api/raise/{what}")
+    def boom(what: str):
+        raise raises[what]
+
+    with live_app(app) as base:
+
+        def get(what):
+            try:
+                with urllib.request.urlopen(base + "/api/raise/" + what) as r:
+                    return r.status, json.load(r)
+            except urllib.error.HTTPError as e:
+                return e.code, json.load(e) if e.code != 500 else None
+
+        assert get("value") == (400, {"detail": "page must be a number", "payload": None})
+        assert get("key") == (404, {"detail": "book 7", "payload": None})  # no quotes, as str(KeyError) has
+        assert get("missing")[0] == 404
+        assert get("conflict") == (409, {"detail": "scan is already running", "payload": {"key": "a"}})
+        assert get("down")[0] == 503
+        assert get("busy") == (429, {"detail": "try later", "payload": {"queue": 3}})
+    only = web.base_app("demo", "1")
+    web.add_error_handlers(only, {Busy: 429}, defaults=False)
+    assert ValueError not in only.exception_handlers
+
+
+def test_system_reports_folders_disks_and_services(live_app, tmp_path):
+    from strata_python.client import ServiceClient
+
+    up = web.base_app("models", "4.2")
+    data = tmp_path / "data"
+    data.mkdir()
+    with live_app(up) as up_url:
+        app = web.base_app("demo", "1", commit="abc123")
+        web.add_system(
+            app,
+            "1",
+            commit="abc123",
+            folders={"data": str(data), "later": lambda: str(tmp_path / "not-yet")},
+            services={"strata-models": ServiceClient(up_url), "gone": "http://127.0.0.1:9"},
+            extra=lambda: {"queued": 2},
+        )
+        with live_app(app) as base:
+            with urllib.request.urlopen(base + "/api/system") as r:
+                info = json.load(r)
+            with urllib.request.urlopen(base + "/api/health") as r:
+                health = json.load(r)
+    assert (info["version"], info["commit"], info["queued"]) == ("1", "abc123", 2)
+    assert info["python"].count(".") == 2
+    folders = {f["name"]: f for f in info["folders"]}
+    assert folders["data"]["exists"]
+    assert folders["data"]["free_bytes"] > 0
+    assert not folders["later"]["exists"]
+    assert folders["later"]["total_bytes"] > 0  # the disk it will be on
+    services = {s["name"]: s for s in info["services"]}
+    assert (services["strata-models"]["ok"], services["strata-models"]["version"]) == (True, "4.2")
+    assert not services["gone"]["ok"]
+    assert "not reachable" in services["gone"]["detail"]
+    assert health == {"ok": True, "version": "1", "commit": "abc123"}
+
+
+def test_system_says_when_a_service_answers_but_is_not_ok(live_app):
+    sick = web.base_app("models", "4", health=lambda: {"ok": False})
+    with live_app(sick) as sick_url:
+        app = web.base_app("demo", "1")
+        web.add_system(app, "1", services={"models": sick_url})
+        with live_app(app) as base, urllib.request.urlopen(base + "/api/system") as r:
+            (s,) = json.load(r)["services"]
+    assert (s["ok"], s["detail"]) == (False, "answered, but not ok")
+
+
+def test_source_commit_reads_git_without_git(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / ".git" / "refs" / "heads").mkdir(parents=True)
+    (repo / "src").mkdir()
+    (repo / "src" / "app.py").write_text("")
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (repo / ".git" / "refs" / "heads" / "main").write_text("a" * 40 + "\n")
+    assert web.source_commit(str(repo / "src" / "app.py")) == "a" * 40
+    (repo / ".git" / "refs" / "heads" / "main").unlink()
+    (repo / ".git" / "packed-refs").write_text(f"# pack-refs\n{'b' * 40} refs/heads/main\n")
+    assert web.source_commit(str(repo / "src")) == "b" * 40
+    (repo / ".git" / "HEAD").write_text("c" * 40)
+    assert web.source_commit(str(repo)) == "c" * 40  # detached
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/gone\n")
+    assert web.source_commit(str(repo)) is None
+    # a worktree: .git is a file naming its folder in the main repo, branches in the common dir
+    wt_git = repo / ".git" / "worktrees" / "wt"
+    wt_git.mkdir(parents=True)
+    (wt_git / "HEAD").write_text("ref: refs/heads/feature\n")
+    (wt_git / "commondir").write_text("../..\n")
+    (repo / ".git" / "refs" / "heads" / "feature").write_text("d" * 40)
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / ".git").write_text(f"gitdir: {wt_git}\n")
+    assert web.source_commit(str(wt)) == "d" * 40
+    assert web.source_commit("/") is None
+
+
+def test_settings_routes_describe_each_setting_in_openapi(live_app, tmp_path):
+    s = Settings("demo-app", [Setting("greeting", default="hi"), ListSetting("roots", item=absolute_path)])
+    with live_app(web.base_app("demo", "1", s)) as base, urllib.request.urlopen(base + "/api/openapi.json") as r:
+        schema = json.load(r)["components"]["schemas"]["DemoAppSettings"]
+    assert schema["properties"]["greeting"]["type"] == "string"
+    assert schema["properties"]["roots"]["type"] == "array"
+    assert set(schema["required"]) == {"greeting", "roots"}

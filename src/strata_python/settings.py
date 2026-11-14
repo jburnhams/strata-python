@@ -326,6 +326,19 @@ class Settings:
     def all(self) -> dict[str, Value]:
         return {k: self.value(k) for k in self._by_key}
 
+    def model(self) -> type[Any]:
+        """The settings as a pydantic model: a field per setting (`str`, or `list[str]` for a `ListSetting`), named
+        `<App>Settings`. `web.base_app` declares it as the settings routes' response, so `/api/openapi.json` describes
+        each setting and a web app's types can be generated from it. Built on each call; pydantic is imported here, so
+        a CLI that only reads settings does not load it."""
+        from pydantic import create_model
+
+        fields: dict[str, Any] = {
+            k: (list[str] if isinstance(s, ListSetting) else str, ...) for k, s in self._by_key.items()
+        }
+        name = "".join(p.capitalize() for p in re.split(r"[^0-9A-Za-z]+", self.app) if p) + "Settings"
+        return create_model(name, **fields)
+
     def folder(self, key: str) -> str:
         """The setting `key` as a folder that exists (created when asked for)."""
         p = self.get(key)

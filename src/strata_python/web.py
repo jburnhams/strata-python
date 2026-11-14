@@ -1,6 +1,8 @@
 """The web side every app shares: health and settings routes, the built web app (or a stand-in page), and the uvicorn runner.
 
     app = base_app("myapp", __version__, SETTINGS)       # /api/health, GET/PUT /api/settings
+    add_error_handlers(app)                               # ValueError -> 400, KeyError -> 404, ... as ErrorBody
+    add_system(app, __version__, folders={"data": SETTINGS.home}, services={"strata-models": MODELS})  # GET /api/system
     ... app routes under /api ...
     add_web(app, STATIC, LANDING)                         # last: assets + the page at every other path
 
@@ -9,15 +11,23 @@ gets a relative `<base href>` (`with_base`) and one build works at the server's 
 assets are relative (Vite `base: './'`)."""
 
 import argparse
+import concurrent.futures
+import datetime
 import os
+import platform
+import shutil
+import sys
 from collections.abc import Callable, Mapping, Sequence
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from strata_python.client import Rejected, ServiceClient, Unavailable
+from strata_python.contracts import ErrorBody, Folder, ServiceStatus, SystemInfo
 from strata_python.settings import Settings
+from strata_python.tasks import Conflict
 
 
 def with_base(html: str, path: str) -> str:
@@ -43,10 +53,12 @@ def base_app(
     *,
     docs: bool = True,
     health: Callable[[], Mapping[str, object]] | None = None,
+    commit: str | None = None,
 ) -> FastAPI:
     """A FastAPI app with `GET /api/health` and, given settings, `GET`/`PUT /api/settings` (a PUT with an unknown key or a value that fails validation is a 400 and changes nothing).
     `health` adds the app's own fields to the health response after `ok` and `version` (strata-models' `gpu`); it is called on every request, so keep it cheap,
-    and it may set `ok` to false for a service that is up but cannot do its work."""
+    and it may set `ok` to false for a service that is up but cannot do its work. `commit` (`source_commit(__file__)`) is
+    answered as `commit`, so a probe can tell which source a server runs without reading files beside it."""
     app = FastAPI(
         title=title,
         docs_url="/api/docs" if docs else None,
@@ -55,15 +67,21 @@ def base_app(
 
     @app.get("/api/health")
     def get_health() -> dict[str, object]:  # pyright: ignore[reportUnusedFunction]
-        return {"ok": True, "version": version, **(health() if health else {})}
+        return {
+            "ok": True,
+            "version": version,
+            **({"commit": commit} if commit else {}),
+            **(health() if health else {}),
+        }
 
     if settings is not None:
+        shape = settings.model()  # the settings as a typed object in /api/openapi.json, for the web app's types
 
-        @app.get("/api/settings")
+        @app.get("/api/settings", response_model=shape)
         def get_settings() -> dict[str, str | list[str]]:  # pyright: ignore[reportUnusedFunction]
             return settings.all()
 
-        @app.put("/api/settings")
+        @app.put("/api/settings", response_model=shape)
         def put_settings(changes: dict[str, str | list[str] | None]) -> dict[str, str | list[str]]:  # pyright: ignore[reportUnusedFunction]
             try:
                 settings.save(changes)
@@ -72,6 +90,141 @@ def base_app(
             return settings.all()
 
     return app
+
+
+def source_commit(path: str) -> str | None:
+    """The git commit of the checkout that holds `path` (pass `__file__`), read from `.git` without running git, or
+    None outside a checkout (an installed wheel). A worktree's `.git` file and packed refs are followed."""
+    d = os.path.abspath(path if os.path.isdir(path) else os.path.dirname(path))
+    while True:
+        dot = os.path.join(d, ".git")
+        if os.path.exists(dot):
+            return _read_head(dot)
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def _read_head(dot: str) -> str | None:
+    try:
+        if os.path.isfile(dot):  # a worktree or submodule: "gitdir: <path>"
+            with open(dot, encoding="utf8") as f:
+                dot = os.path.join(os.path.dirname(dot), f.read().split(":", 1)[1].strip())
+        with open(os.path.join(dot, "HEAD"), encoding="utf8") as f:
+            head = f.read().strip()
+        if not head.startswith("ref:"):
+            return head or None  # detached
+        ref = head.split(":", 1)[1].strip()
+        common = dot
+        if os.path.exists(os.path.join(dot, "commondir")):  # a worktree keeps its branches in the main .git
+            with open(os.path.join(dot, "commondir"), encoding="utf8") as f:
+                common = os.path.normpath(os.path.join(dot, f.read().strip()))
+        for base in (dot, common):
+            loose = os.path.join(base, *ref.split("/"))
+            if os.path.isfile(loose):
+                with open(loose, encoding="utf8") as f:
+                    return f.read().strip() or None
+        with open(os.path.join(common, "packed-refs"), encoding="utf8") as f:
+            for line in f:
+                sha, _, name = line.strip().partition(" ")
+                if name == ref:
+                    return sha
+    except (OSError, IndexError):
+        return None
+    return None
+
+
+ErrorMap = Mapping[type[Exception], int]
+DEFAULT_ERRORS: ErrorMap = {
+    ValueError: 400,  # a request the app cannot use (pydantic's ValidationError is one too)
+    PermissionError: 403,
+    FileNotFoundError: 404,
+    KeyError: 404,  # an id the app does not know
+    Conflict: 409,  # tasks.SingleFlight: that job is already running
+    Rejected: 502,  # a service this app called refused: the request is fine, the dependency said no
+    Unavailable: 503,  # a service this app needs is down
+}
+
+
+def add_error_handlers(app: FastAPI, errors: ErrorMap | None = None, *, defaults: bool = True) -> None:
+    """Answer the app's own exceptions as HTTP errors with an `ErrorBody` ({detail, payload}), instead of a
+    `try/except` and `HTTPException` in every route (the `guard()` five servers wrote). `errors` maps an exception
+    class to a status and is added to `DEFAULT_ERRORS` (pass `defaults=False` for only yours); a subclass takes the
+    closest mapped class. An exception's `.payload`, when it has one, is sent as `payload`."""
+    table = {**(DEFAULT_ERRORS if defaults else {}), **(errors or {})}
+
+    def handler(status: int) -> Callable[[Request, Exception], JSONResponse]:
+        def answer(request: Request, e: Exception) -> JSONResponse:
+            detail = str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e) or type(e).__name__
+            body = ErrorBody(detail=detail, payload=getattr(e, "payload", None))
+            return JSONResponse(body.model_dump(mode="json"), status_code=status)
+
+        return answer
+
+    for cls, status in table.items():
+        app.add_exception_handler(cls, handler(status))  # pyright: ignore[reportArgumentType] - Starlette types the handler's exception as Exception
+
+
+def _folder(name: str, path: str) -> Folder:
+    probe = path
+    while not os.path.exists(probe) and os.path.dirname(probe) != probe:
+        probe = os.path.dirname(probe)  # the disk a missing folder will be on
+    try:
+        usage = shutil.disk_usage(probe)
+        free, total = usage.free, usage.total
+    except OSError:
+        free = total = None
+    return Folder(name=name, path=path, exists=os.path.isdir(path), free_bytes=free, total_bytes=total)
+
+
+def _service(name: str, client: ServiceClient) -> ServiceStatus:
+    try:
+        h = client.health()
+    except (Unavailable, Rejected) as e:
+        return ServiceStatus(name=name, url=client.url(), ok=False, detail=str(e))
+    version = h.get("version")
+    return ServiceStatus(
+        name=name,
+        url=client.url(),
+        ok=bool(h.get("ok")),
+        version=None if version is None else str(version),
+        detail=None if h.get("ok") else "answered, but not ok",
+    )
+
+
+def add_system(
+    app: FastAPI,
+    version: str,
+    *,
+    commit: str | None = None,
+    folders: Mapping[str, str | Callable[[], str]] | None = None,
+    services: Mapping[str, ServiceClient | str] | None = None,
+    extra: Callable[[], Mapping[str, object]] | None = None,
+) -> None:
+    """`GET /api/system`, a `SystemInfo`: the version and commit, Python and platform, when the server started, each
+    named folder with its disk's free and total space, and each service this app calls with what its health endpoint
+    answers now (probed in parallel, 2 s each). A folder is a path or a function giving one (a setting read on each
+    request); a service is a `ServiceClient` or a base URL. `extra` adds the app's own fields (a queue length)."""
+    started = datetime.datetime.now(datetime.UTC)
+    clients = {k: v if isinstance(v, ServiceClient) else ServiceClient(v) for k, v in (services or {}).items()}
+
+    @app.get("/api/system", response_model=SystemInfo)
+    def get_system() -> SystemInfo:  # pyright: ignore[reportUnusedFunction]
+        paths = {k: v if isinstance(v, str) else v() for k, v in (folders or {}).items()}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(clients), 1)) as pool:
+            probes = [pool.submit(_service, k, c) for k, c in clients.items()]
+            statuses = [p.result() for p in probes]
+        return SystemInfo(
+            version=version,
+            commit=commit,
+            python=sys.version.split()[0],
+            platform=platform.platform(terse=True),
+            started_at=started,
+            folders=[_folder(k, p) for k, p in paths.items()],
+            services=statuses,
+            **(extra() if extra else {}),
+        )
 
 
 def add_web(app: FastAPI, static: str, landing: str | None = None) -> None:

@@ -4,10 +4,13 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 
 | Module | What it gives an app |
 |---|---|
-| `strata_python.oslib` | Cross-platform file locks, process liveness (`pid_alive`), `kill_tree`, `lower_priority`, `venv_python`, `cli_command(module)` |
+| `strata_python.oslib` | Cross-platform file locks, process liveness (`pid_alive`), `kill_tree`, `lower_priority`, `detached_kwargs`, `load_average`, `venv_python`, `cli_command(module)` |
 | `strata_python.settings` | `Settings` / `Setting` / `ListSetting`: one JSON file in `~/.<app>` with `<APP>_*` environment overrides, validation (`absolute_path`, `non_empty`, `number_between`, `whole_between`, `iso_date`, `boolean`), typed getters, atomic saves, and `bind(store)` to keep them elsewhere (`strata_python.db.settings.TableStore`) |
-| `strata_python.web` | `base_app` (health with the app's own fields + settings routes), `add_web` (built web app or stand-in page at every non-API path), `with_base` (reverse-proxy-safe `<base href>`), `static_file` (path-safe), `serve` |
+| `strata_python.web` | `base_app` (health with the app's own fields and `commit` + typed settings routes), `add_error_handlers` (exceptions to `ErrorBody` responses), `add_system` (`GET /api/system`: folders, disks, services), `source_commit`, `add_web` (built web app or stand-in page at every non-API path), `with_base` (reverse-proxy-safe `<base href>`), `static_file` (path-safe), `serve` |
 | `strata_python.cli` | `add_doctor` (imports, labels, optional modules and the app's own `Check`s), `add_set`, `add_serve` for the app's argparse subcommands |
+| `strata_python.contracts` | The shapes the apps' APIs share, as pydantic models for `response_model`: `Health`, `SystemInfo`, `ErrorBody`, `Task` (with `TaskState`), `Progress`, `Page[T]`, `FileRef`, `Judgment` |
+| `strata_python.client` | `ServiceClient`, the standard-library base for calling a strata service: JSON calls, `Rejected` (4xx, with the reason and payload) and `Unavailable` (down or 5xx), retried reads, a long-poll `wait`, `available()`, and `env_url` |
+| `strata_python.tasks` | Work outside a request: `next_state`/`backoff_s`/`RetryLater` (when to retry), `report_progress` and `ProgressReporter` (throttled), `SingleFlight` (one run per key, `Conflict` on a second), `StatusFile` and `Detached` (a process that outlives the server), `Ticker` (a loop that survives its errors) |
 | `strata_python.clients.models` | The strata-models client, standard library only: `run`, `submit`, `wait`, `role_model`, `gpu_lease`, a shortcut for every role the service runs (`faces`, `face_kind`, `transcribe`, `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed`, `enhance_video`, and `ask` for the language models) and a typed result for each |
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
 | pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, `fake_models` (a stand-in strata-models), and the `integration` marker on everything under `tests/integration` |
@@ -114,6 +117,18 @@ def create_app():
     return app
 ```
 
+Two more that replace code most servers carry:
+
+```python
+web.add_error_handlers(app)          # ValueError 400, PermissionError 403, KeyError and FileNotFoundError 404,
+                                     # tasks.Conflict 409, client.Rejected 502, client.Unavailable 503: {detail, payload}
+web.add_system(app, __version__, commit=web.source_commit(__file__),
+               folders={"data": lambda: SETTINGS.get("data_dir")},
+               services={"strata-models": "http://127.0.0.1:8366"})   # GET /api/system, a SystemInfo
+```
+
+Delete the app's `guard()` (or each route's `try/except` raising `HTTPException`), passing its own exceptions as `add_error_handlers(app, {BookLocked: 423})`, and its `/api/system` route. Give `base_app` the same `commit=` so `/api/health` says which source the server runs. Declare a route's answer with a shape from `strata_python.contracts` (`response_model=Page[Task]`) where the app already returns that shape, so the web app's types can come from `/api/openapi.json`.
+
 Delete the app's own `/api/health` and `/api/settings` routes, its `/assets` mount, SPA fallback, `with_base` and `static_file` copies and its `uvicorn.run` wrapper. `web.serve(app, argv, default_port=...)` replaces the last of these. For health fields of the app's own, pass `health=lambda: {"gpu": gpu_name()}`: they follow `ok` and `version`, and may set `ok` to false. It runs on every request, so keep it cheap.
 
 ### 5. The CLI
@@ -171,7 +186,16 @@ The shortcuts still return the service's JSON, so existing code keeps working, a
 
 ### 6. OS helpers
 
-Delete the app's `oslib.py` and import from `strata_python.oslib`: `file_lock(f)`, `pid_alive(pid)`, `kill_tree(pid, sig)`, `lower_priority(nice, io=False)` (`io=True` for idle disk priority too; drop the app's `ionice` helper), `venv_python(venv)` and `cli_command(module)`. `cli_command` now takes the module name (`cli_command("myapp")`). Local `alive(pid)`, `_alive` and `lower_priority()` copies go too. Helpers this library does not have yet (process-group supervision, load average) stay in the app until they move here, and the app's file says so.
+Delete the app's `oslib.py` and import from `strata_python.oslib`: `file_lock(f)`, `pid_alive(pid)`, `kill_tree(pid, sig)`, `lower_priority(nice, io=False)` (`io=True` for idle disk priority too; drop the app's `ionice` helper), `venv_python(venv)` and `cli_command(module)`. `cli_command` now takes the module name (`cli_command("myapp")`). Local `alive(pid)`, `_alive` and `lower_priority()` copies go too. `detached_kwargs()` starts a process outside the server's session and `load_average()` replaces 360's copy. Helpers this library does not have yet (listory's process-group supervisor) stay in the app until they move here, and the app's file says so.
+
+### 6b. Background work
+
+Replace the app's job dicts and loops with `strata_python.tasks`:
+
+- An in-process run per key ("scan this folder") is `SingleFlight`: `FLIGHTS.start(key, fn)` raises `Conflict` (a 409 with `add_error_handlers`) when that key is running; `fn(flight)` checks `flight.stopping`; `FLIGHTS.get(key).as_json()` is the status. Delete the app's `*_JOBS` dicts, their locks and their stop flags.
+- Work that must outlive a restart is `Detached(cmd, status_path, log)`: `start()`, `read()`, `stop()`. The child writes its own progress and end state with `StatusFile.from_env().update(...)`. Delete the app's `write_status` copies and its pid bookkeeping.
+- A loop every N seconds is `Ticker(every_s, fn, name=...)`. Delete the hand-written `while not stop.wait(...)` threads.
+- Progress from deep inside a task is `report_progress(done, total, text)`; the runner binds a `ProgressReporter` (at most one write a second). Retry rules are `next_state(attempts, error, progressed=...)`: delete the app's own backoff.
 
 ### 7. Tests
 

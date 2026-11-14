@@ -118,3 +118,20 @@ def test_lower_priority_io_in_a_child_reaches_its_children():
 
 def test_lower_priority_in_this_process_with_no_change():
     oslib.lower_priority(0)  # nice(0) is a no-op, so this process keeps its priority
+
+
+def test_detached_kwargs_start_a_new_session():
+    import os
+
+    kw = oslib.detached_kwargs()
+    p = subprocess.Popen(
+        [sys.executable, "-c", "import os; print(os.getsid(0))"], stdout=subprocess.PIPE, text=True, **kw
+    )
+    out, _ = p.communicate(timeout=20)
+    assert int(out) == p.pid != os.getsid(0)  # its own session, so the server's signals do not reach it
+
+
+def test_load_average():
+    load = oslib.load_average()
+    assert load is not None
+    assert len(load) == 3
