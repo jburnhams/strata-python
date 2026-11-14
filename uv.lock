@@ -596,7 +596,7 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
-[package.dev-dependencies]
+[package.optional-dependencies]
 dev = [
     { name = "httpx" },
     { name = "pyright" },
@@ -608,26 +608,31 @@ dev = [
     { name = "ty" },
 ]
 
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "pydantic", specifier = ">=2.9" },
-    { name = "pytest", specifier = ">=8" },
-    { name = "tzdata", marker = "sys_platform == 'win32'" },
-    { name = "uvicorn", specifier = ">=0.32" },
+[package.dev-dependencies]
+dev = [
+    { name = "strata-python", extra = ["dev"] },
 ]
 
-[package.metadata.requires-dev]
-dev = [
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "pyright" },
-    { name = "pytest-cov", specifier = ">=5" },
-    { name = "pytest-randomly" },
-    { name = "pytest-timeout" },
-    { name = "pytest-xdist" },
-    { name = "ruff" },
-    { name = "ty" },
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27,<1" },
+    { name = "pydantic", specifier = ">=2.9,<3" },
+    { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.400,<2" },
+    { name = "pytest", specifier = ">=8,<10" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5,<8" },
+    { name = "pytest-randomly", marker = "extra == 'dev'", specifier = ">=3,<6" },
+    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2,<3" },
+    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3,<4" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.17,<0.18" },
+    { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.99,<0.1" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
+    { name = "uvicorn", specifier = ">=0.32,<1" },
 ]
+provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "strata-python", extras = ["dev"] }]
 
 [[package]]
 name = "ty"

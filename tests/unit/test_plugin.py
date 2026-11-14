@@ -91,3 +91,59 @@ def test_live_app_fixture_serves_a_fastapi_app(child):
         """
     )
     child.runpytest_subprocess().assert_outcomes(passed=1)
+
+
+def test_strata_env_sets_variables_under_the_isolated_dir(pytester: pytest.Pytester):
+    pytester.makeini("[pytest]\nstrata_env = APPX_SWEEP=0 APPX_PROJECTS={env}/projects\n")
+    pytester.makepyfile(
+        """
+        import os
+
+        def test_it(isolated_env):
+            assert os.environ["APPX_SWEEP"] == "0"
+            assert os.environ["APPX_PROJECTS"] == str(isolated_env) + "/projects"
+        """
+    )
+    pytester.runpytest_subprocess().assert_outcomes(passed=1)
+
+
+def test_strata_env_entries_must_be_pairs(pytester: pytest.Pytester):
+    pytester.makeini("[pytest]\nstrata_env = BROKEN\n")
+    pytester.makepyfile("def test_it():\n    pass\n")
+    r = pytester.runpytest_subprocess()
+    r.assert_outcomes(errors=1)
+    r.stdout.fnmatch_lines(["*strata_env entries are KEY=VALUE*"])
+
+
+def test_tests_under_integration_are_marked(pytester: pytest.Pytester):
+    pytester.makepyfile(
+        **{"integration/test_slow": "def test_slow():\n    pass\n", "unit/test_fast": "def test_fast():\n    pass\n"}
+    )
+    pytester.runpytest_subprocess("--strict-markers", "-m", "integration").assert_outcomes(passed=1, deselected=1)
+    pytester.makeini("[pytest]\nstrata_auto_integration = false\n")
+    pytester.runpytest_subprocess("-m", "integration").assert_outcomes(deselected=2)
+
+
+def test_a_checkout_under_a_folder_called_integration_is_not_all_integration(pytester: pytest.Pytester):
+    root = pytester.mkdir("integration") / "app"
+    (root / "tests" / "unit").mkdir(parents=True)
+    (root / "pytest.ini").write_text("[pytest]\n")
+    (root / "tests" / "unit" / "test_fast.py").write_text("def test_fast():\n    pass\n")
+    r = pytester.runpytest_subprocess(str(root), "--rootdir", str(root), "-m", "not integration")
+    r.assert_outcomes(passed=1)
+
+
+def test_fakes_are_fixtures_in_an_app(pytester: pytest.Pytester):
+    pytester.makepyfile(
+        """
+        import subprocess, urllib.request
+        from strata_python.testing import http_error
+
+        def test_it(fake_urlopen, fake_popen, fake_run, no_sleep):
+            fake_urlopen.reply({"ok": 1})
+            assert urllib.request.urlopen("https://api.example/").read() == b'{"ok": 1}'
+            subprocess.Popen(["x"])
+            assert len(fake_popen.instances) == 1
+        """
+    )
+    pytester.runpytest_subprocess().assert_outcomes(passed=1)

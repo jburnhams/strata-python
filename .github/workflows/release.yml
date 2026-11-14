@@ -117,6 +117,13 @@ jobs:
           git switch -C "$branch"
           # Sets pyproject.toml's version and the project's entry in uv.lock together, so `uv sync --locked` still passes
           uv version "$VERSION"
+          # The app-facing changelog: what was under "Unreleased" becomes this version's section
+          python3 - "$VERSION" <<'PY'
+          import datetime, pathlib, sys
+          path = pathlib.Path("CHANGELOG.md")
+          heading = f"## Unreleased\n\n## {sys.argv[1]} ({datetime.date.today().isoformat()})"
+          path.write_text(path.read_text().replace("## Unreleased", heading, 1))
+          PY
           git commit -am "ci: release v$VERSION [skip ci]"
           # Force: a re-run after a failed attempt replaces the bot's own branch
           git push --force origin "$branch"
@@ -143,6 +150,18 @@ jobs:
           echo "Merged as $sha"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
+      - name: "Release notes from CHANGELOG.md"
+        if: ${{ steps.bump.outputs.sha || steps.first.outputs.sha }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.bump.outputs.sha || steps.first.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin "$SHA" && git show "$SHA:CHANGELOG.md" > /tmp/changelog.md
+          # This version's section, without its heading; the GitHub-generated PR list follows it
+          awk -v v="## $VERSION " 'index($0, v) == 1 {on = 1; next} on && /^## / {exit} on' /tmp/changelog.md > release-notes.md
+          cat release-notes.md
+
       - name: "Create tag and GitHub release"
         if: ${{ steps.bump.outputs.sha || steps.first.outputs.sha }}
         uses: "softprops/action-gh-release@v2"
@@ -150,6 +169,7 @@ jobs:
           tag_name: v${{ steps.version.outputs.version }}
           target_commitish: ${{ steps.bump.outputs.sha || steps.first.outputs.sha }}
           name: Release v${{ steps.version.outputs.version }}
+          body_path: release-notes.md
           generate_release_notes: true
           # Must be the `token` input: the action ignores a GITHUB_TOKEN env var
           # and would create the release as github-actions[bot], whose events

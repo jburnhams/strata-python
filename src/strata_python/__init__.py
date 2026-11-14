@@ -6,7 +6,8 @@ web          reverse-proxy-safe page serving, health and settings routes, static
 cli          argparse commands every app has: doctor, set, serve
 http_server  a real scripted HTTP server on loopback for tests of outbound requests
 live         run a FastAPI app on a real loopback port for tests
-pytest plugin (automatic once installed): hermetic environment, no-network guard, `http_server` and `live_app` fixtures
+testing      the fakes for HTTP, subprocesses and sleep, and CLI runners, shared by every app's tests
+pytest plugin (automatic once installed): hermetic environment, no-network guard, `http_server`, `live_app` and the fake_* fixtures
 check        `strata-check`, the one gate: lockfile, ruff, ruff format, pyright, ty, unit tests with coverage
 public_check `strata-public-check`: no email addresses, private addresses, home paths or owner-listed names in what is published
 """
