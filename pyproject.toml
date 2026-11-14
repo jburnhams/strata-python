@@ -55,6 +55,13 @@ db = [
     "alembic>=1.13,<2",
     "psycopg[binary]>=3.2,<4",
 ]
+# strata_python.pages: a scanned page's description drawn as a PDF with real text, rasterised back for scoring, and the
+# text read back. ReportLab (BSD) writes and pdfium (BSD/Apache) reads: no AGPL library, since this package is MIT.
+pdf = [
+    "reportlab>=4.2,<6",
+    "pypdfium2>=4.30,<6",
+    "pillow>=10,<13",
+]
 
 [project.urls]
 Homepage = "https://github.com/jburnhams/strata-python"
@@ -71,7 +78,7 @@ strata_python = "strata_python.pytest_plugin"
 strata_python_db = "strata_python.db.pytest_plugin"   # inert unless the db extra is installed
 
 [dependency-groups]
-dev = ["strata-python[dev,db]"]   # the same tools the apps get, and the db extra so its tests run
+dev = ["strata-python[dev,db,pdf]"]   # the same tools the apps get, and the db and pdf extras so their tests run
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/strata_python"]

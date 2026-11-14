@@ -38,6 +38,7 @@ Prefer real code over mocks. A test that runs the real thing finds the bugs that
 ```
 src/strata_python/   oslib, settings, web, cli, http_server, live, testing, pytest_plugin, check, public_check; py.typed
   db/                the [db] extra: config, guard, engine, models, project, migrations, scratch, testserver, testing, cli, pytest_plugin, _alembic/
+  pages/             model (the page description, plain data) and render (the [pdf] extra: ReportLab writes, pdfium reads back)
 tests/unit/          one test module per module; tests/conftest.py loads the plugin and holds the tiny_project fixture
 tests/integration/   the gate on a tiny project; serve in a separate process
 scripts/check        the gate (uv run --locked strata-check)
