@@ -4,6 +4,16 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**A stand-in strata-models for the apps' tests (branch `claude/project-thread-aefumh`)**
+
+The move-out plan's next step for the models client: every app that calls strata-models would otherwise write its own fake service or mock the client. The stand-in that tested the client here becomes public, so apps test their own calls against the same service steps over real HTTP.
+
+- `src/strata_python/testing.py`: `FakeModels` (FastAPI, imported inside the constructor so importing the fakes stays light) with the job, lease, heartbeat, release, registry and health endpoints, scripted results and failures, `busy`, `refuse` and `down`; `MODELS_RESULTS`, the example replies that were in the test, with output paths under `/out/` (ruff's S108 refuses `/tmp` in `src`).
+- `src/strata_python/pytest_plugin.py`: the `fake_models` fixture (served by `live_server`, `STRATA_MODELS_URL` set).
+- `tests/unit/test_clients_models.py`: uses the fixture instead of its own `Service` class. `tests/unit/test_testing.py`: scripted results, a failure for one role, a missing job and lease, an unknown role, an outage, `running_polls=0`.
+- `README.md` (module table, step 5b, fixture table), `CHANGELOG.md`.
+
+
 **Pillow 13 as the `[pdf]` extra's floor (branch `claude/project-thread-aefumh`)**
 
 The audit job failed on main after `strata_python.pages` landed: the lock held Pillow 12.3.0, which has eight advisories fixed in 13.0.0. Dependabot's PR #23 raised the cap and the lock; this raises the floor too, so an app that installs `[pdf]` cannot resolve to a vulnerable Pillow either.

@@ -10,8 +10,8 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 | `strata_python.cli` | `add_doctor` (imports, labels, optional modules and the app's own `Check`s), `add_set`, `add_serve` for the app's argparse subcommands |
 | `strata_python.clients.models` | The strata-models client, standard library only: `run`, `submit`, `wait`, `role_model`, `gpu_lease`, a shortcut for every role the service runs (`faces`, `face_kind`, `transcribe`, `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed`, `enhance_video`, and `ask` for the language models) and a typed result for each |
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
-| pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, and the `integration` marker on everything under `tests/integration` |
-| `strata_python.testing` | The fakes behind those fixtures (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) and the CLI runners `run_cli(main, *args)` and `run_module("myapp", *args, src=...)` |
+| pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, `fake_models` (a stand-in strata-models), and the `integration` marker on everything under `tests/integration` |
+| `strata_python.testing` | The fakes behind those fixtures (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) `FakeModels`, and the CLI runners `run_cli(main, *args)` and `run_module("myapp", *args, src=...)` |
 | `strata_python.db` (extra `[db]`) | The shared database: `connect("myapp")` (the app's schema of one shared Postgres, or a SQLite path), a declarative base with the shared `NAMING_CONVENTION` for typed models, Alembic migrations with no per-app `env.py`, the live-database guard, the `strata-db` command, and the `db_*` fixtures (SQLite by default, a throwaway Postgres with `--pg`) |
 | `strata_python.pages` (extra `[pdf]`) | A scanned page described as blocks, lines, styled spans and figures in scan pixels, drawn as a PDF with real embedded fonts (`render`), and read back as pixels at the scan's dpi (`rasterise`) and as text (`read_text`): for rebuilding scanned books, and for scoring a rebuild with the renderer that prints it |
 | `strata-check` | The one gate: lockfile, ruff, `ruff format`, pyright strict, ty, unit tests with coverage |
@@ -167,7 +167,7 @@ with sm.gpu_lease("strata-stills", vram_gb=4):
     run_my_own_cuda_code()
 ```
 
-The shortcuts still return the service's JSON, so existing code keeps working, and the result classes keep all of it in `.raw`. There is one shortcut for every role the service runs (`sm.ROLES`): `faces`, `face_kind`, `transcribe` (also `role="transcribe-fast"`), `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed` and `enhance_video`, plus `ask` for the language-model roles (`vision-language`, `text`, and the judges). Each has a result class (`Answer`, `GeneratedImage`, `Embeddings`, `FaceKinds`, `CleanAudio`, `AudioQuality`, `EnhancedVideo` and the four above). The roles `models.toml` lists without a runtime yet (sound-events, speaker-embedding, detect-people, upscale, denoise, nsfw) have none: `run(role, params, app)` reaches them once the service serves them.
+The shortcuts still return the service's JSON, so existing code keeps working, and the result classes keep all of it in `.raw`. There is one shortcut for every role the service runs (`sm.ROLES`): `faces`, `face_kind`, `transcribe` (also `role="transcribe-fast"`), `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed` and `enhance_video`, plus `ask` for the language-model roles (`vision-language`, `text`, and the judges). Each has a result class (`Answer`, `GeneratedImage`, `Embeddings`, `FaceKinds`, `CleanAudio`, `AudioQuality`, `EnhancedVideo` and the four above). In tests, the `fake_models` fixture (section 7) stands in for the service, so the app's tests need neither the service nor a GPU. The roles `models.toml` lists without a runtime yet (sound-events, speaker-embedding, detect-people, upscale, denoise, nsfw) have none: `run(role, params, app)` reaches them once the service serves them.
 
 ### 6. OS helpers
 
@@ -229,8 +229,9 @@ What every test gets:
 | `fake_popen` | Code that starts a long-running process: nothing starts; `fake_popen.instances[-1].cmd` and `.kw`; set `.returncode = 0` to finish it |
 | `fake_run` | Code that runs a program: `fake_run.returns["ffprobe"] = b"..."`, `fake_run.code = 1`, then `fake_run.calls` |
 | `no_sleep` | Retries and backoff without waiting: `no_sleep.delays` |
+| `fake_models` | An app that calls strata-models: a stand-in service on a real port with `STRATA_MODELS_URL` set, so `strata_python.clients.models` runs unchanged. `fake_models.results["ocr"] = {...}` (or a function of the params), `.fail("CUDA out of memory", role="faces")`, `.busy = True` (leases wait), `.down = True` (503s), then `.jobs[0]["params"]` |
 
-`strata_python.testing` holds the classes behind them (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) for a test that needs one directly. Prefer the real thing: `http_server` over `fake_urlopen`, the actual program over `fake_run`. A fake is for a true external edge where speed matters.
+`strata_python.testing` holds the classes behind them (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`, `FakeModels` and its example replies `MODELS_RESULTS`) for a test that needs one directly. Prefer the real thing: `http_server` over `fake_urlopen`, the actual program over `fake_run`. A fake is for a true external edge where speed matters.
 
 ### 8. Database (apps with one)
 
