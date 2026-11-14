@@ -58,7 +58,13 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     if not config.getini("strata_auto_integration"):
         return
     for item in items:
-        if "integration" in item.path.parent.parts:
+        # Relative to the pytest root: a checkout that happens to sit under a folder called "integration" must not
+        # mark every test (review finding)
+        try:
+            parts = item.path.parent.relative_to(config.rootpath).parts
+        except ValueError:  # a test outside the root (an explicit path elsewhere): leave it as it is
+            continue
+        if "integration" in parts:
             item.add_marker(pytest.mark.integration)
 
 

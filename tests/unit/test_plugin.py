@@ -124,6 +124,15 @@ def test_tests_under_integration_are_marked(pytester: pytest.Pytester):
     pytester.runpytest_subprocess("-m", "integration").assert_outcomes(deselected=2)
 
 
+def test_a_checkout_under_a_folder_called_integration_is_not_all_integration(pytester: pytest.Pytester):
+    root = pytester.mkdir("integration") / "app"
+    (root / "tests" / "unit").mkdir(parents=True)
+    (root / "pytest.ini").write_text("[pytest]\n")
+    (root / "tests" / "unit" / "test_fast.py").write_text("def test_fast():\n    pass\n")
+    r = pytester.runpytest_subprocess(str(root), "--rootdir", str(root), "-m", "not integration")
+    r.assert_outcomes(passed=1)
+
+
 def test_fakes_are_fixtures_in_an_app(pytester: pytest.Pytester):
     pytester.makepyfile(
         """

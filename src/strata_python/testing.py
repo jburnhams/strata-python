@@ -59,11 +59,14 @@ class FakeResponse:
 
     def __init__(self, body: Body = b"", status: int = 200, headers: Mapping[str, str] | None = None) -> None:
         self.body = _encode(body)
+        self._stream = io.BytesIO(
+            self.body
+        )  # reads consume it, so a chunked read loop reaches EOF as on a real response
         self.status = status
         self.headers: dict[str, str] = dict(headers or {})
 
     def read(self, n: int = -1) -> bytes:
-        return self.body if n < 0 else self.body[:n]
+        return self._stream.read(n)
 
     def getcode(self) -> int:
         return self.status

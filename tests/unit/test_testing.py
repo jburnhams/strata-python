@@ -32,6 +32,12 @@ def test_fake_urlopen_replies_in_order_and_records_each_request(fake_urlopen):
     assert (third.method, third.body, third.headers) == (None, b"not json", {})
 
 
+def test_fake_response_reads_to_eof_in_chunks():
+    r = FakeResponse(b"abcdef")
+    assert [r.read(4), r.read(4), r.read(4)] == [b"abcd", b"ef", b""]
+    assert FakeResponse({"a": 1}).read() == b'{"a": 1}'
+
+
 def test_fake_urlopen_fails_rather_than_reaching_the_network(fake_urlopen):
     fake_urlopen.reply(OSError("down"))
     with pytest.raises(OSError, match="down"):
