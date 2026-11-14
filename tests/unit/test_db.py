@@ -6,6 +6,7 @@ no mocks. Tests that rewrite an app's models after importing them run strata-db 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -262,6 +263,43 @@ def test_models_are_typed_records_with_stable_constraint_names(app: Path):
     assert meta.naming_convention == db.NAMING_CONVENTION
     assert db.make_base() is not db.make_base()  # each app its own MetaData
     assert db.Base.metadata.naming_convention["pk"] == "pk_%(table_name)s"
+
+
+TYPED_MODELS = """
+from sqlalchemy import MetaData
+from sqlalchemy.orm import DeclarativeBase, Mapped, MappedAsDataclass, mapped_column
+
+from strata_python.db import NAMING_CONVENTION
+
+
+class Base(MappedAsDataclass, DeclarativeBase):
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
+
+
+class Photo(Base):
+    __tablename__ = "photos"
+    id: Mapped[int] = mapped_column(primary_key=True, init=False)
+    name: Mapped[str]
+
+
+ok = Photo(name="a")
+"""
+
+
+@pytest.mark.parametrize("checker", ["ty", "pyright"])
+def test_the_documented_base_passes_both_type_checkers(tmp_path: Path, checker: str):
+    """Issue #20: the base README step 8 shows passes the gate's checkers, and they check the dataclass constructor
+    through it (a misspelt argument is an error), so the pattern is not passing by being opaque."""
+    exe = shutil.which(checker, path=str(Path(sys.executable).parent))  # the venv's, with .exe on Windows
+    assert exe is not None
+    args = ["check", "--python", sys.executable] if checker == "ty" else ["--pythonpath", sys.executable]
+    (tmp_path / "models.py").write_text(TYPED_MODELS)
+    clean = subprocess.run([exe, *args, "models.py"], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    (tmp_path / "models.py").write_text(TYPED_MODELS + 'bad = Photo(nmae="a")\n')
+    typo = subprocess.run([exe, *args, "models.py"], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert typo.returncode != 0
+    assert "nmae" in typo.stdout
 
 
 def test_init_writes_config(app: Path):

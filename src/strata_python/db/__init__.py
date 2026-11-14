@@ -2,10 +2,13 @@
 SQLAlchemy models, Alembic migrations generated from them, the `strata-db` command and pytest fixtures. Install the
 extra: `strata-python[db]`.
 
-    from strata_python.db import connect, make_base, session
-    from sqlalchemy.orm import Mapped, mapped_column
+    from sqlalchemy import MetaData
+    from sqlalchemy.orm import DeclarativeBase, Mapped, MappedAsDataclass, mapped_column
+    from strata_python.db import NAMING_CONVENTION, connect, session
 
-    Base = make_base()
+    class Base(MappedAsDataclass, DeclarativeBase):  # the app's own base: written out, so ty and pyright accept it
+        metadata = MetaData(naming_convention=NAMING_CONVENTION)
+
     class Note(Base):                       # a typed record; Alembic generates the table from it
         __tablename__ = "notes"
         id: Mapped[int] = mapped_column(primary_key=True, init=False)

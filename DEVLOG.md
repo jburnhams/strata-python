@@ -4,6 +4,16 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**Models: declare the base class, since ty cannot subclass `make_base()` (issue #20; branch `claude/project-thread-vzy9v6`)**
+
+strata-stills found that ty reports `unsupported-base` on `class Photo(Base)` when `Base = make_base()`, and the gate fails on ty's warnings. Reproduced with this repo's ty: a value typed `type[DataclassBase]` has no MRO ty can know. pyright accepts it, which is why PR #7's checks passed.
+
+- Considered a shared base class to subclass instead (the issue's second option): it cannot work, because SQLAlchemy gives a registry and MetaData only to a *direct* subclass of DeclarativeBase, so every app's tables would share one MetaData. So the docs show the two-line class with `NAMING_CONVENTION` (the issue's first option) and `make_base()` stays for run-time use.
+- `src/strata_python/db/models.py`, `src/strata_python/db/__init__.py`: docstrings show the class and say why.
+- `tests/unit/test_db.py`: ty and pyright run on a models file written the documented way; both pass it, and both fail a misspelt constructor argument, so the check sees through the base.
+- `README.md` (module table, step 8), `CHANGELOG.md`.
+
+
 **`oslib.lower_priority(io=True)` (issue #12; branch `claude/project-thread-vzy9v6`)**
 
 Three strata-stills scripts each carry `os.nice(15)` plus `ionice -c3 -p <pid>`; it moved the CPU half to `lower_priority` and kept the I/O half, which belongs here.

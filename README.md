@@ -11,7 +11,7 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
 | pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, and the `integration` marker on everything under `tests/integration` |
 | `strata_python.testing` | The fakes behind those fixtures (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) and the CLI runners `run_cli(main, *args)` and `run_module("myapp", *args, src=...)` |
-| `strata_python.db` (extra `[db]`) | The shared database: `connect("myapp")` (the app's schema of one shared Postgres, or a SQLite path), `make_base()` for typed models, Alembic migrations with no per-app `env.py`, the live-database guard, the `strata-db` command, and the `db_*` fixtures (SQLite by default, a throwaway Postgres with `--pg`) |
+| `strata_python.db` (extra `[db]`) | The shared database: `connect("myapp")` (the app's schema of one shared Postgres, or a SQLite path), a declarative base with the shared `NAMING_CONVENTION` for typed models, Alembic migrations with no per-app `env.py`, the live-database guard, the `strata-db` command, and the `db_*` fixtures (SQLite by default, a throwaway Postgres with `--pg`) |
 | `strata-check` | The one gate: lockfile, ruff, `ruff format`, pyright strict, ty, unit tests with coverage |
 | `strata-public-check` | Fails on email addresses, private IPv4 addresses, home-folder paths and the regexes in `STRATA_PUBLIC_DENY` in a tree, sdist or wheel; run before anything public is published. Silence a false positive with `[tool.strata-public-check] exclude = ["web/package-lock.json"]` (or `--exclude`), or `strata-public-check: ignore` on the line (never applies to `STRATA_PUBLIC_DENY`) |
 
@@ -204,7 +204,18 @@ migrations = "migrations"        # the app's Alembic revisions, unchanged
 # engine = "postgres"            # only for an app that uses Postgres-only features
 ```
 
-- Imports: the old package's names come from `strata_python.db` (`connect`, `session`, `make_base`, `Project`, `upgrade`, `drift`, `check_migrations`, `LiveDatabaseRefused`); the standard tests from `strata_python.db.testing`. The naming convention is byte-identical, so existing revisions and databases do not drift.
+- Imports: the old package's names come from `strata_python.db` (`connect`, `session`, `NAMING_CONVENTION`, `Project`, `upgrade`, `drift`, `check_migrations`, `LiveDatabaseRefused`); the standard tests from `strata_python.db.testing`. The naming convention is byte-identical, so existing revisions and databases do not drift.
+- Models: write the base class out, not `Base = make_base()`, which ty rejects as a base (`unsupported-base`) and so fails the gate:
+
+  ```python
+  from sqlalchemy import MetaData
+  from sqlalchemy.orm import DeclarativeBase, MappedAsDataclass
+  from strata_python.db import NAMING_CONVENTION
+
+
+  class Base(MappedAsDataclass, DeclarativeBase):
+      metadata = MetaData(naming_convention=NAMING_CONVENTION)
+  ```
 - Environment: `STRATA_DB_LIVE=1` in the service unit (next to the old variable until every app has moved), and `STRATA_DB_DATABASE` naming the shared database. It has no built-in name any more, because that name is the owner's and this package is public; set it once where the services get their environment. `STRATA_DB_URL` and `<APP>_DATABASE_URL` work as before. Tests and CI: `STRATA_DB_TEST_ADMIN_URL`, `STRATA_DB_TEST=postgres`.
 - Commands: `strata-db revision -m "..."`, `strata-db check`, `strata-db migrate --live`, `strata-db current --live`, `strata-db new-app`, `strata-db init` (or `python -m strata_python.db`).
 - At service start (only there): `Project.load(__file__).upgrade(connect("myapp"))`.
