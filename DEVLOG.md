@@ -4,6 +4,14 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**Pillow 13 as the `[pdf]` extra's floor (branch `claude/project-thread-aefumh`)**
+
+The audit job failed on main after `strata_python.pages` landed: the lock held Pillow 12.3.0, which has eight advisories fixed in 13.0.0. Dependabot's PR #23 raised the cap and the lock; this raises the floor too, so an app that installs `[pdf]` cannot resolve to a vulnerable Pillow either.
+
+- `pyproject.toml`: `pillow>=13,<14`. `uv.lock`.
+- `CHANGELOG.md`.
+
+
 **The strata-models client moves in as `strata_python.clients.models` (issue #18; branch `claude/project-thread-vzy9v6`)**
 
 Apps installed strata-models' client from a path or a git URL into their own venvs. The library rules say a strata service's client belongs here. The owner chose standard library and dataclasses for it, with no pydantic and no `[models]` extra, because the client is called from code and does not validate requests. That replaces the morning's note about `strata_python.services.models` on pydantic.
