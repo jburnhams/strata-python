@@ -172,12 +172,22 @@ def _draw_line(c: Any, line: Line, block: Block, fonts: _Fonts, k: float, page_h
         t = c.beginText(x, page_h_pt - (r.baseline if r.baseline is not None else line_base) * k)
         t.setFont(r.font, r.size)
         t.setHorizScale(r.hscale * 100)
-        t.setCharSpace(r.track + extra)
+        # PDF scales character spacing by the horizontal scale too (Tz applies to Tc): divide it out, so tracking and
+        # fitting are the advance on the page that _run_width counts
+        t.setCharSpace((r.track + extra) / r.hscale)
         if r.weight > 0:  # fill and stroke the glyphs: heavier print than the face's own weight
-            c.setLineWidth(r.weight)
             t.setTextRenderMode(2)
         t.textOut(r.text)
-        c.drawText(t)
+        if r.weight > 0:
+            # the render mode and line width are graphics state that outlive the text object (and ReportLab assumes a
+            # fresh one is fill-only, so it never sets 0 again): save and restore round the run, or every later word
+            # on the page would be stroked too
+            c.saveState()
+            c.setLineWidth(r.weight)
+            c.drawText(t)
+            c.restoreState()
+        else:
+            c.drawText(t)
         x += _run_width(fonts, r, extra)
 
 

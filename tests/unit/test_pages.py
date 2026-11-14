@@ -232,3 +232,20 @@ def test_words_placed_by_a_font_matcher_are_set_where_they_were_measured():
     heavy = ink(rasterise(render(one_line(Span("l", size_pt=20, stroke_em=0.05)), fit=False)))
     thin = ink(rasterise(render(one_line(Span("l", size_pt=20)), fit=False)))
     assert heavy[2] - heavy[0] > thin[2] - thin[0]
+
+
+def test_a_heavy_word_leaves_the_next_one_as_it_was():
+    plain = ink(rasterise(render(one_line(Span("l", x=600, size_pt=20)))))
+    after_heavy = rasterise(render(one_line(Span("l", size_pt=20, stroke_em=0.08), Span("l", x=600, size_pt=20))))
+    second = ink(after_heavy.crop((500, 0, 1200, 600)))
+    assert second[2] - second[0] == plain[2] - plain[0]
+
+
+def test_tracking_is_the_advance_on_the_page_even_when_scaled():
+    # "HH" squeezed to half width with 0.5 em tracking, then "I": the I starts one tracking gap after the second H
+    pdf = render(one_line(Span("HH", size_pt=10, hscale=0.5, tracking_em=0.5), Span("I", size_pt=10)), fit=False)
+    img = rasterise(pdf)
+    hh = ink(rasterise(render(one_line(Span("HH", size_pt=10, hscale=0.5, tracking_em=0.5)), fit=False)))
+    i_left = ink(img.crop((hh[2] + 1, 0, 1200, 600)))[0] + hh[2] + 1
+    gap_px = 0.5 * 10 * 300 / 72
+    assert abs((i_left - hh[2]) - gap_px) <= 4

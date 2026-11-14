@@ -75,8 +75,9 @@ def _to_dict(obj: Any) -> dict[str, Any]:
 class Span:
     """A run of text in one style. `face` names a font in the renderer's `fonts` mapping (None: the standard face for the
     style); `size_pt` is the size to set (None: the line's, else one worked out from the line box); `tracking_em` is extra
-    advance after each glyph in ems of the size; `hscale` is horizontal scale (1.0 = none); `stroke_em` thickens
-    (above 0) the strokes by that share of an em, for print heavier than the face.
+    advance after each glyph in ems of the size; `hscale` is horizontal scale (1.0 = none); `stroke_em` is the width
+    of a stroke drawn round the glyphs, in ems of the size, for print heavier than the face: the stroke is centred on
+    the outline, so each edge moves out by half of it (0 or less: no stroke).
 
     Geometry measured per word (a font matcher fits each word): `x` is where the span's ink starts and `baseline_y`
     its baseline, both in scan pixels. A span with an `x` is set there rather than after the span before it, and a
