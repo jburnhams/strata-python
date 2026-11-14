@@ -27,7 +27,23 @@ TRANSCRIPT = {
 }  # fmt: skip
 FACES = {"width": 640, "height": 480, "faces": [{"bbox": [1, 2, 30, 40], "kps": [[5, 6]] * 5, "det_score": 0.87, "embedding": [0.1] * 4, "pose": [1, 2, 3]}, {"bbox": [9, 9, 20, 20]}]}  # fmt: skip
 SPEECH = {"path": "/tmp/s.wav", "duration_s": 2.5, "sample_rate": 24000, "seconds": 0.8, "engine": "kokoro", "voice": "af_heart", "seed": 1, "speech_s": 2.1}  # fmt: skip
-RESULTS = {"ocr": OCR, "transcribe": TRANSCRIPT, "faces": FACES, "speak": SPEECH}
+ANSWER = {"text": '{"scene": "beach"}', "json": {"scene": "beach"}, "tokens_in": 812, "tokens_out": 9, "seconds": 1.4, "model": "qwen3.5-9b-vl", "peak_vram_mb": 7100}  # fmt: skip
+IMAGE = {"path": "/tmp/g.png", "width": 1024, "height": 768, "seed": 1234, "steps": 4, "seconds": 9.5, "peak_vram_mb": 9000, "model": "flux3-klein"}  # fmt: skip
+EMBED = {"images": [[0.6, 0.8]], "texts": [[1.0, 0.0], [0.0, 1.0]], "dim": 2}
+FACE_KIND = {"faces": [{"real": True, "kind": "person", "probs": {"person": 0.97, "statue": 0.03}}, {"real": False, "kind": "statue", "probs": {}}], "head": "trained head.npz"}  # fmt: skip
+CLEAN = {"path": "/tmp/c.wav", "duration_s": 4.0, "sample_rate": 48000, "seconds": 0.7, "engine": "dfn3", "model": "deepfilternet3", "lufs_in": -31.2, "lufs_out": -14.0, "removed_db": 6.5}  # fmt: skip
+QUALITY = {"dnsmos": {"sig": 3.4, "bak": 3.9, "ovrl": 3.0}, "squim": {"stoi": 0.93, "pesq": 2.8, "si_sdr": 14.2}, "duration_s": 4.0}  # fmt: skip
+VIDEO = {
+    "path": "/tmp/v.mp4", "width": 1440, "height": 1080, "fps": 50.0, "frames": 400, "seconds": 61.0, "engine": "ffmpeg", "model": "video-lanczos",
+    "crops": [{"id": "face", "label": "Gran", "box": [100, 50, 80, 80], "path": "/tmp/v-face.mp4", "stills": ["/tmp/v-face-3.png"]}],
+    "stills": ["/tmp/v-1.png"], "enhance_s": 40.0, "quality": {"ssim": 0.91, "skipped": "no numpy"},
+}  # fmt: skip
+RESULTS = {
+    "ocr": OCR, "transcribe": TRANSCRIPT, "transcribe-fast": TRANSCRIPT, "faces": FACES, "speak": SPEECH,
+    "vision-language": ANSWER, "text": ANSWER, "judge-text": ANSWER, "judge-vision": ANSWER, "judge-audio": ANSWER,
+    "image-generate": IMAGE, "image-embed": EMBED, "face-kind": FACE_KIND, "denoise-audio": CLEAN, "audio-quality": QUALITY,
+    "video-enhance": VIDEO,
+}  # fmt: skip
 
 
 class Service:
@@ -213,3 +229,62 @@ def test_a_lease_refused_and_a_finished_job_row(service):
         sm.acquire("x")
     jid = sm.submit("faces", {}, app="x")["id"]
     assert sm.wait_job(jid)["status"] == "done"
+
+
+def test_every_role_the_service_runs_has_a_result_here():
+    assert set(sm.ROLES) == set(RESULTS)
+
+
+def test_the_other_shortcuts_send_what_the_service_expects(service):
+    sm.ask("What is here?", app="strata-stills", image="a.jpg", schema={"type": "object"})
+    sm.ask(None, app="x", role="text", preset="image-prompt-bfl", context={"subject": "a kiln"})
+    sm.generate_image("a kiln at dusk", app="x", ref_images=["r.png"], seed=7)
+    sm.embed("strata-stills", paths=["a.jpg"], texts=["a beach"], array={"path": "p.npz", "bgr": True})
+    sm.face_kind("a.jpg", app="strata-stills", boxes=[(1, 2, 30, 40)])
+    sm.face_kind(None, app="x", array={"path": "crops.npy"})
+    sm.denoise_audio("talk.wav", app="strata-360", clip=(0, 5), lufs=None)
+    sm.audio_quality("talk.wav", app="x", reference="clean.wav", metrics=["intrusive"])
+    sm.audio_quality("talk.wav", app="x")
+    sm.enhance_video("tape.mkv", app="strata-tapes", size=[1440, 1080])
+    jobs = [service.jobs[i] for i in sorted(service.jobs)]
+    assert [j["role"] for j in jobs] == [
+        "vision-language", "text", "image-generate", "image-embed", "face-kind", "face-kind", "denoise-audio",
+        "audio-quality", "audio-quality", "video-enhance",
+    ]  # fmt: skip
+    p = [j["params"] for j in jobs]
+    assert p[0]["prompt"] == "What is here?"
+    assert p[0]["image"].endswith("a.jpg")
+    assert p[0]["image"] != "a.jpg"  # made absolute: the service resolves paths from its own folder
+    assert "prompt" not in p[1]
+    assert p[1]["preset"] == "image-prompt-bfl"
+    assert (p[2]["prompt"], p[2]["seed"], p[2]["ref_images"][0].endswith("r.png")) == ("a kiln at dusk", 7, True)
+    assert (p[3]["texts"], p[3]["array"]["bgr"], p[3]["array"]["path"].endswith("p.npz")) == (["a beach"], True, True)
+    assert p[4]["boxes"] == [[1, 2, 30, 40]]
+    assert "boxes" not in p[5]
+    assert (p[6]["clip"], p[6]["lufs"]) == ([0, 5], None)
+    assert (p[7]["metrics"], p[7]["reference"].endswith("clean.wav")) == (["intrusive"], True)
+    assert set(p[8]) == {"path"}
+    assert p[9]["size"] == [1440, 1080]
+
+
+def test_the_other_typed_results():
+    a = sm.Answer.from_json(ANSWER)
+    assert (a.json, a.tokens_in, a.cost_usd, a.raw["peak_vram_mb"]) == ({"scene": "beach"}, 812, None, 7100)
+    assert sm.Answer.from_json({"text": "hi", "cost_usd": 0.002, "provider": "claude"}).provider == "claude"
+    g = sm.GeneratedImage.from_json(IMAGE)
+    assert (g.path, g.seed, g.steps) == ("/tmp/g.png", 1234, 4)
+    e = sm.Embeddings.from_json(EMBED)
+    assert (e.images, len(e.texts), e.dim, e.out) == ([[0.6, 0.8]], 2, 2, None)
+    to_file = sm.Embeddings.from_json({"out": "/tmp/e.npz", "images": 3, "texts": 0, "dim": 512})
+    assert (to_file.images, to_file.out, to_file.raw["images"]) == ([], "/tmp/e.npz", 3)
+    k = sm.FaceKinds.from_json(FACE_KIND)
+    assert [(f.real, f.kind) for f in k.faces] == [(True, "person"), (False, "statue")]
+    assert (k.faces[0].probs["person"], k.head) == (0.97, "trained head.npz")
+    c = sm.CleanAudio.from_json(CLEAN)
+    assert (c.sample_rate, c.lufs_out, c.removed_db) == (48000, -14.0, 6.5)
+    q = sm.AudioQuality.from_json(QUALITY)
+    assert (q.dnsmos["ovrl"], q.squim["si_sdr"], q.intrusive) == (3.0, 14.2, {})
+    v = sm.EnhancedVideo.from_json(VIDEO)
+    assert (v.fps, v.frames, v.crops[0].box, v.crops[0].stills, v.quality["skipped"]) == (
+        50.0, 400, (100, 50, 80, 80), ["/tmp/v-face-3.png"], "no numpy",
+    )  # fmt: skip

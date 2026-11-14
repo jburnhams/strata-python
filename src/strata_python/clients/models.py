@@ -8,6 +8,13 @@ behaviour are the same, plus typed result shapes.
     page = sm.OcrPage.from_json(sm.ocr("/p.png", app="strata-scan"))   # typed: page.lines[0].words[0].box
     with sm.gpu_lease("strata-stills", vram_gb=4): ...
 
+One shortcut per role the service runs (`ROLES`), each with its result shape:
+
+    faces            Faces            face_kind        FaceKinds        ocr              OcrPage
+    transcribe(-fast) Transcript      speak            Speech           denoise_audio    CleanAudio
+    audio_quality    AudioQuality     generate_image   GeneratedImage   embed            Embeddings
+    enhance_video    EnhancedVideo    ask (vision-language, text, judge-text, judge-vision, judge-audio)  Answer
+
 The service URL is STRATA_MODELS_URL (default http://127.0.0.1:8366). Inputs are file paths: the service runs on the
 same machine. strata-models tests this module against its real API in its own integration suite; this repo tests it
 against a stand-in service over real HTTP.
@@ -132,6 +139,29 @@ def run(
     return wait(int(submit(role, params, app, priority, model)["id"]), timeout)
 
 
+ROLES = (
+    "faces",
+    "face-kind",
+    "transcribe",
+    "transcribe-fast",
+    "ocr",
+    "speak",
+    "denoise-audio",
+    "audio-quality",
+    "image-generate",
+    "image-embed",
+    "video-enhance",
+    "vision-language",
+    "text",
+    "judge-text",
+    "judge-vision",
+    "judge-audio",
+)
+"""The roles the service runs (each has a shortcut here; `ask` covers the language-model ones). `models.toml` also
+lists sound-events, speaker-embedding, detect-people, upscale, denoise and nsfw, but no runtime serves them yet: apps
+still load those models themselves. `run(role, params, app)` reaches any role, including one added after this list."""
+
+
 def faces(path: str | None, app: str, priority: Priority = "normal", model: str | None = None, **params: Any) -> Json:
     """Faces in one image (`Faces.from_json`): params max_side, det_thresh, fields. Several images: path=None and
     `paths=[...]`, giving {'images': [...]}, one `Faces` each."""
@@ -175,6 +205,127 @@ def speak(text: str, app: str, priority: Priority = "normal", model: str | None 
     if params.get("voice") and os.path.exists(str(params["voice"])):
         params["voice"] = os.path.abspath(params["voice"])
     return run("speak", {**params, "text": text}, app, priority=priority, model=model)
+
+
+def _abs(params: dict[str, Any], *keys: str) -> None:
+    """Make the file paths under `keys` absolute (one path or a list): the service resolves them from its own folder."""
+    for k in keys:
+        v = params.get(k)
+        if isinstance(v, str) and v:
+            params[k] = os.path.abspath(v)
+        elif isinstance(v, list | tuple):
+            params[k] = [os.path.abspath(str(x)) for x in cast("Sequence[Any]", v)]
+
+
+ASK_ROLES = ("vision-language", "text", "judge-text", "judge-vision", "judge-audio")
+
+
+def ask(
+    prompt: str | None,
+    app: str,
+    role: str = "vision-language",
+    priority: Priority = "normal",
+    model: str | None = None,
+    **params: Any,
+) -> Json:
+    """A language model (`Answer.from_json`), local or cloud, by role: `vision-language` (questions about pictures),
+    `text` (text in, text out), and the evals' judges `judge-text`, `judge-vision`, `judge-audio`. params: image /
+    images, audio / audios (paths), preset + context (a prompt kept in the service; then `prompt` may be None),
+    system or system_preset, schema (a JSON schema the answer must follow; its parsed answer is `json`), max_tokens,
+    temperature, seed, think, effort (cloud models)."""
+    if prompt is not None:
+        params["prompt"] = prompt
+    _abs(params, "image", "images", "audio", "audios")
+    return run(role, params, app, priority=priority, model=model)
+
+
+def generate_image(
+    prompt: str, app: str, priority: Priority = "normal", model: str | None = None, **params: Any
+) -> Json:
+    """A picture from a prompt (role `image-generate`, `GeneratedImage.from_json`): params negative_prompt, width,
+    height (multiples of 16, default 1024), steps, cfg_scale, sampler, seed (random unless given; always returned),
+    ref_images (paths to edit from or refer to)."""
+    params["prompt"] = prompt
+    _abs(params, "ref_images")
+    return run("image-generate", params, app, priority=priority, model=model)
+
+
+def embed(
+    app: str,
+    paths: Sequence[str] = (),
+    texts: Sequence[str] = (),
+    priority: Priority = "normal",
+    model: str | None = None,
+    **params: Any,
+) -> Json:
+    """CLIP vectors, L2-normalised, for pictures and prompts (role `image-embed`, `Embeddings.from_json`): a dot
+    product is a cosine similarity. params: array ({path, key?, bgr?}: images in an .npy/.npz), resize ('crop' or
+    'square'), out (an .npz to write instead of answering with the numbers, for thousands of pictures)."""
+    if paths:
+        params["paths"] = list(paths)
+    if texts:
+        params["texts"] = list(texts)
+    _abs(params, "paths", "out")
+    if isinstance(params.get("array"), dict):
+        params["array"] = {**params["array"], "path": os.path.abspath(params["array"]["path"])}
+    return run("image-embed", params, app, priority=priority, model=model)
+
+
+def face_kind(
+    path: str | None,
+    app: str,
+    boxes: Sequence[Sequence[float]] = (),
+    priority: Priority = "normal",
+    model: str | None = None,
+    **params: Any,
+) -> Json:
+    """Whether each face is a real person or a statue, picture, toy or animal (role `face-kind`,
+    `FaceKinds.from_json`): an image `path` and the `boxes` the faces role gave ([x1, y1, x2, y2]), or path=None and
+    array={path, key?, bgr?} of face crops already cut."""
+    if path is not None:
+        params["path"] = os.path.abspath(path)
+        params["boxes"] = [list(b) for b in boxes]
+    if isinstance(params.get("array"), dict):
+        params["array"] = {**params["array"], "path": os.path.abspath(params["array"]["path"])}
+    return run("face-kind", params, app, priority=priority, model=model)
+
+
+def denoise_audio(path: str, app: str, priority: Priority = "normal", model: str | None = None, **params: Any) -> Json:
+    """Noise out of recorded sound, speech kept clear (role `denoise-audio`, `CleanAudio.from_json`): params clip
+    (start, end), highpass (Hz), atten_lim_db, finish ("strata360" or "none"), lufs (None keeps the level), and the
+    engine's own. The WAV at `path` is the service's copy."""
+    params["path"] = os.path.abspath(path)
+    if "clip" in params:
+        params["clip"] = list(params["clip"])
+    return run("denoise-audio", params, app, priority=priority, model=model)
+
+
+def audio_quality(
+    path: str,
+    app: str,
+    reference: str | None = None,
+    metrics: Sequence[str] | None = None,
+    priority: Priority = "normal",
+    model: str | None = None,
+) -> Json:
+    """How good a speech recording sounds, measured (role `audio-quality`, `AudioQuality.from_json`): DNSMOS and
+    SQUIM without a reference, si_sdr, pesq and estoi against a clean `reference`. `metrics` picks among "dnsmos",
+    "squim" and "intrusive" (default all that apply)."""
+    params: dict[str, Any] = {"path": os.path.abspath(path)}
+    if reference is not None:
+        params["reference"] = os.path.abspath(reference)
+    if metrics is not None:
+        params["metrics"] = list(metrics)
+    return run("audio-quality", params, app, priority=priority, model=model)
+
+
+def enhance_video(path: str, app: str, priority: Priority = "normal", model: str | None = None, **params: Any) -> Json:
+    """Old video made better: deinterlaced, upscaled and restored into a playable MP4 (role `video-enhance`,
+    `EnhancedVideo.from_json`): params deinterlace, field_order, crop [x, y, w, h], prep_size and size [w, h],
+    regions [{id, label, box}], stills, crf, seed, cleanup, quality. Long clips take minutes: give `timeout` to
+    `run` instead when the app must not wait that long."""
+    params["path"] = os.path.abspath(path)
+    return run("video-enhance", params, app, priority=priority, model=model)
 
 
 def role_model(role: str) -> str | None:
@@ -435,4 +586,195 @@ class Speech:
         return cls(
             str(d["path"]), float(d["duration_s"]), int(d["sample_rate"]), d.get("engine"),
             None if voice is None else str(voice), _opt_float(d, "seconds"), d,
+        )  # fmt: skip
+
+
+def _opt_str(d: Json, key: str) -> str | None:
+    v = d.get(key)
+    return None if v is None else str(v)
+
+
+def _opt_int(d: Json, key: str) -> int | None:
+    v = d.get(key)
+    return None if v is None else int(v)
+
+
+def _floats_map(v: object) -> dict[str, float]:
+    return {str(k): float(x) for k, x in cast("dict[str, Any]", v).items()} if isinstance(v, dict) else {}
+
+
+@dataclass(frozen=True)
+class Answer:
+    """`ask`'s roles: the model's text, and with a schema its parsed answer in `json` (None when it did not parse)."""
+
+    text: str
+    json: Any = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    seconds: float | None = None
+    model: str | None = None
+    cost_usd: float | None = None  # cloud models
+    provider: str | None = None  # cloud models
+    raw: Json = field(default_factory=lambda: {}, repr=False, compare=False)
+
+    @classmethod
+    def from_json(cls, d: Json) -> Answer:
+        return cls(
+            str(d.get("text", "")), d.get("json"), _opt_int(d, "tokens_in"), _opt_int(d, "tokens_out"),
+            _opt_float(d, "seconds"), _opt_str(d, "model"), _opt_float(d, "cost_usd"), _opt_str(d, "provider"), d,
+        )  # fmt: skip
+
+
+@dataclass(frozen=True)
+class GeneratedImage:
+    """Role `image-generate`: the picture on this machine (the service's copy) and the seed that makes it again."""
+
+    path: str
+    width: int
+    height: int
+    seed: int
+    steps: int | None = None
+    seconds: float | None = None
+    model: str | None = None
+    raw: Json = field(default_factory=lambda: {}, repr=False, compare=False)
+
+    @classmethod
+    def from_json(cls, d: Json) -> GeneratedImage:
+        return cls(
+            str(d["path"]), int(d["width"]), int(d["height"]), int(d["seed"]), _opt_int(d, "steps"),
+            _opt_float(d, "seconds"), _opt_str(d, "model"), d,
+        )  # fmt: skip
+
+
+@dataclass(frozen=True)
+class Embeddings:
+    """Role `image-embed`: one vector per picture and per prompt, in the order sent. With `out=`, the vectors are in
+    that .npz file and `images` and `texts` are empty (`raw` has their counts)."""
+
+    images: list[list[float]]
+    texts: list[list[float]]
+    dim: int
+    out: str | None = None
+    raw: Json = field(default_factory=lambda: {}, repr=False, compare=False)
+
+    @classmethod
+    def from_json(cls, d: Json) -> Embeddings:
+        def vectors(v: object) -> list[list[float]]:
+            return [_floats(x) for x in cast("list[Any]", v)] if isinstance(v, list) else []
+
+        return cls(vectors(d.get("images")), vectors(d.get("texts")), int(d["dim"]), _opt_str(d, "out"), d)
+
+
+@dataclass(frozen=True)
+class FaceKind:
+    real: bool
+    kind: str  # person, statue, picture, toy, animal
+    probs: dict[str, float]
+
+
+@dataclass(frozen=True)
+class FaceKinds:
+    """Role `face-kind`: one verdict per box (or crop), in order; `head` says whether a trained head or CLIP's
+    zero-shot similarity decided."""
+
+    faces: list[FaceKind]
+    head: str | None = None
+    raw: Json = field(default_factory=lambda: {}, repr=False, compare=False)
+
+    @classmethod
+    def from_json(cls, d: Json) -> FaceKinds:
+        kinds = [
+            FaceKind(bool(f["real"]), str(f["kind"]), _floats_map(f.get("probs")))
+            for f in cast("list[Json]", d.get("faces", []))
+        ]
+        return cls(kinds, _opt_str(d, "head"), d)
+
+
+@dataclass(frozen=True)
+class CleanAudio:
+    """Role `denoise-audio`: a 48 kHz mono WAV (the service's copy), its loudness before and after, and how much the
+    denoiser took out."""
+
+    path: str
+    duration_s: float
+    sample_rate: int
+    engine: str | None = None
+    model: str | None = None
+    lufs_in: float | None = None
+    lufs_out: float | None = None
+    removed_db: float | None = None
+    seconds: float | None = None
+    raw: Json = field(default_factory=lambda: {}, repr=False, compare=False)
+
+    @classmethod
+    def from_json(cls, d: Json) -> CleanAudio:
+        return cls(
+            str(d["path"]), float(d["duration_s"]), int(d["sample_rate"]), _opt_str(d, "engine"), _opt_str(d, "model"),
+            _opt_float(d, "lufs_in"), _opt_float(d, "lufs_out"), _opt_float(d, "removed_db"), _opt_float(d, "seconds"), d,
+        )  # fmt: skip
+
+
+@dataclass(frozen=True)
+class AudioQuality:
+    """Role `audio-quality`: each group only when it was asked for and could be measured, else empty.
+    dnsmos: sig, bak, ovrl (1-5); squim: stoi (0-1), pesq (1-4.5), si_sdr (dB); intrusive: si_sdr, pesq, estoi."""
+
+    dnsmos: dict[str, float]
+    squim: dict[str, float]
+    intrusive: dict[str, float]
+    duration_s: float | None = None
+    raw: Json = field(default_factory=lambda: {}, repr=False, compare=False)
+
+    @classmethod
+    def from_json(cls, d: Json) -> AudioQuality:
+        return cls(
+            _floats_map(d.get("dnsmos")), _floats_map(d.get("squim")), _floats_map(d.get("intrusive")),
+            _opt_float(d, "duration_s"), d,
+        )  # fmt: skip
+
+
+@dataclass(frozen=True)
+class VideoCrop:
+    id: str
+    label: str
+    box: tuple[int, int, int, int]  # in source pixels
+    path: str
+    stills: list[str]
+
+
+@dataclass(frozen=True)
+class EnhancedVideo:
+    """Role `video-enhance`: the MP4 (the service's copy), enlarged crops of the asked regions, still frames, and the
+    quality readings that could be taken (ssim, psnr, flicker, sharpness, noise...)."""
+
+    path: str
+    width: int
+    height: int
+    fps: float | None
+    frames: int | None
+    crops: list[VideoCrop]
+    stills: list[str]
+    quality: dict[str, Any]
+    engine: str | None = None
+    model: str | None = None
+    seconds: float | None = None
+    raw: Json = field(default_factory=lambda: {}, repr=False, compare=False)
+
+    @classmethod
+    def from_json(cls, d: Json) -> EnhancedVideo:
+        crops = [
+            VideoCrop(
+                str(c.get("id", "")),
+                str(c.get("label", "")),
+                _box(c["box"]),
+                str(c["path"]),
+                [str(p) for p in cast("list[Any]", c.get("stills", []))],
+            )
+            for c in cast("list[Json]", d.get("crops", []))
+        ]
+        stills = [str(p) for p in cast("list[Any]", d.get("stills", []))]
+        quality = cast("dict[str, Any]", d.get("quality") or {})
+        return cls(
+            str(d["path"]), int(d["width"]), int(d["height"]), _opt_float(d, "fps"), _opt_int(d, "frames"), crops,
+            stills, quality, _opt_str(d, "engine"), _opt_str(d, "model"), _opt_float(d, "seconds"), d,
         )  # fmt: skip

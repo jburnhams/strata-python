@@ -8,7 +8,7 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 | `strata_python.settings` | `Settings` / `Setting` / `ListSetting`: one JSON file in `~/.<app>` with `<APP>_*` environment overrides, validation (`absolute_path`, `non_empty`, `number_between`, `whole_between`, `iso_date`, `boolean`), typed getters, atomic saves, and `bind(store)` to keep them elsewhere (`strata_python.db.settings.TableStore`) |
 | `strata_python.web` | `base_app` (health with the app's own fields + settings routes), `add_web` (built web app or stand-in page at every non-API path), `with_base` (reverse-proxy-safe `<base href>`), `static_file` (path-safe), `serve` |
 | `strata_python.cli` | `add_doctor` (imports, labels, optional modules and the app's own `Check`s), `add_set`, `add_serve` for the app's argparse subcommands |
-| `strata_python.clients.models` | The strata-models client, standard library only: `run`, `submit`, `wait`, `faces`, `transcribe`, `ocr`, `speak`, `role_model`, `gpu_lease`, and typed results (`OcrPage`, `Transcript`, `Faces`, `Speech`) |
+| `strata_python.clients.models` | The strata-models client, standard library only: `run`, `submit`, `wait`, `role_model`, `gpu_lease`, a shortcut for every role the service runs (`faces`, `face_kind`, `transcribe`, `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed`, `enhance_video`, and `ask` for the language models) and a typed result for each |
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
 | pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, and the `integration` marker on everything under `tests/integration` |
 | `strata_python.testing` | The fakes behind those fixtures (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) and the CLI runners `run_cli(main, *args)` and `run_module("myapp", *args, src=...)` |
@@ -166,7 +166,7 @@ with sm.gpu_lease("strata-stills", vram_gb=4):
     run_my_own_cuda_code()
 ```
 
-The shortcuts still return the service's JSON, so existing code keeps working, and the result classes keep all of it in `.raw`.
+The shortcuts still return the service's JSON, so existing code keeps working, and the result classes keep all of it in `.raw`. There is one shortcut for every role the service runs (`sm.ROLES`): `faces`, `face_kind`, `transcribe` (also `role="transcribe-fast"`), `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed` and `enhance_video`, plus `ask` for the language-model roles (`vision-language`, `text`, and the judges). Each has a result class (`Answer`, `GeneratedImage`, `Embeddings`, `FaceKinds`, `CleanAudio`, `AudioQuality`, `EnhancedVideo` and the four above). The roles `models.toml` lists without a runtime yet (sound-events, speaker-embedding, detect-people, upscale, denoise, nsfw) have none: `run(role, params, app)` reaches them once the service serves them.
 
 ### 6. OS helpers
 
