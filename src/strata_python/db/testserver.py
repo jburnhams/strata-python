@@ -26,6 +26,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import uuid
 from urllib.parse import quote
 
 from strata_python.oslib import WIN, pid_alive
@@ -37,12 +38,12 @@ _url: str | None = None
 
 # Runs in its own process, so it outlives a killed test run: wait for the owner to go, then stop and delete.
 WATCHDOG = """
-import shutil, subprocess, sys, time
+import os, shutil, subprocess, sys, time
 from strata_python.oslib import pid_alive
 owner, pg_ctl, d = int(sys.argv[1]), sys.argv[2], sys.argv[3]
 while pid_alive(owner):
     time.sleep(2)
-subprocess.run([pg_ctl, "-D", d + "/data", "-m", "immediate", "stop"], capture_output=True)
+subprocess.run([pg_ctl, "-D", d + "/data", "-m", "immediate", "stop"], capture_output=True, cwd=os.path.dirname(pg_ctl))
 shutil.rmtree(d, ignore_errors=True)
 """
 
@@ -94,7 +95,7 @@ def _stop(d: str, bindir: str | None) -> None:
     data = os.path.join(d, "data")
     if bindir and os.path.exists(os.path.join(data, "postmaster.pid")):
         subprocess.run(  # noqa: S603  (the server's own pg_ctl on its own data dir)
-            [_tool(bindir, "pg_ctl"), "-D", data, "-m", "immediate", "-w", "stop"], capture_output=True
+            [_tool(bindir, "pg_ctl"), "-D", data, "-m", "immediate", "-w", "stop"], capture_output=True, cwd=bindir
         )
     shutil.rmtree(d, ignore_errors=True)
 
@@ -122,10 +123,12 @@ def _free_port() -> int:
 def _initdb(bindir: str, data: str, user: str) -> subprocess.CompletedProcess[str]:
     cmd = [_tool(bindir, "initdb"), "-D", data, "-A", "trust", "-U", user, "--no-sync", "-E", "UTF8"]
     # Same collation as a current server (builtin C.UTF-8, PostgreSQL 17+); an older initdb falls back to its default.
-    r = subprocess.run([*cmd, "--locale-provider=builtin", "--builtin-locale=C.UTF-8"], capture_output=True, text=True)  # noqa: S603
+    r = subprocess.run(  # noqa: S603
+        [*cmd, "--locale-provider=builtin", "--builtin-locale=C.UTF-8"], capture_output=True, text=True, cwd=bindir
+    )
     if r.returncode:
         shutil.rmtree(data, ignore_errors=True)
-        r = subprocess.run(cmd, capture_output=True, text=True)  # noqa: S603
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=bindir)  # noqa: S603
     return r
 
 
@@ -154,7 +157,13 @@ def url() -> str:
             f"server package, or set {TEST_ADMIN_URL} to a throwaway server"
         )
     reap(bindir)
-    d = tempfile.mkdtemp(prefix=PREFIX, dir=_tmp_root())
+    if WIN:
+        # initdb and pg_ctl run as administrator drop to a restricted token, which cannot open a folder made with
+        # mkdtemp (0o700 becomes an owner-only ACL from Python 3.13): make it with the default ACL instead.
+        d = os.path.join(_tmp_root(), PREFIX + uuid.uuid4().hex[:8])
+        os.mkdir(d)
+    else:
+        d = tempfile.mkdtemp(prefix=PREFIX, dir=_tmp_root())
     with open(os.path.join(d, "owner"), "w", encoding="utf-8") as f:
         f.write(str(os.getpid()))
     data, user = os.path.join(d, "data"), getpass.getuser()
@@ -172,7 +181,10 @@ def url() -> str:
     opts = f"{listen} -c fsync=off -c synchronous_commit=off -c full_page_writes=off -c max_connections=200"
     log = os.path.join(d, "log")
     r = subprocess.run(  # noqa: S603  (the server's own pg_ctl)
-        [_tool(bindir, "pg_ctl"), "-D", data, "-l", log, "-o", opts, "-w", "start"], capture_output=True, text=True
+        [_tool(bindir, "pg_ctl"), "-D", data, "-l", log, "-o", opts, "-w", "start"],
+        capture_output=True,
+        text=True,
+        cwd=bindir,
     )
     if r.returncode:
         text = open(log, encoding="utf-8", errors="replace").read() if os.path.exists(log) else ""  # noqa: SIM115
