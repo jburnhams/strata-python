@@ -1,7 +1,11 @@
 """Declarative bases for apps' models.
 
-    from strata_python.db import make_base
-    Base = make_base()                    # one per app, in its models module
+    from sqlalchemy import MetaData
+    from sqlalchemy.orm import DeclarativeBase, Mapped, MappedAsDataclass, mapped_column
+    from strata_python.db import NAMING_CONVENTION
+
+    class Base(MappedAsDataclass, DeclarativeBase):     # one per app, in its models module
+        metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
     class Note(Base):
         __tablename__ = "notes"
@@ -13,6 +17,12 @@ convention gives every index and constraint a stable name, which Alembic needs t
 especially on SQLite (batch mode recreates tables and must name what it recreates). It must stay exactly as it is:
 the apps' existing revisions and databases carry these names, and a change would make every one of them drift.
 `Base` is a ready-made shared one for scripts that only ever load one app's models.
+
+An app writes its base class out, as above, rather than `Base = make_base()` (issue #20): ty cannot take a value of
+type `type[...]` as a base class, since it cannot know that value's MRO, and the gate fails on its warning. pyright
+accepts either. A class statement cannot be shared from here instead: SQLAlchemy makes only a *direct* subclass of
+DeclarativeBase a base with its own registry and MetaData, so a subclass of a base defined here would put every app's
+tables in one MetaData. `make_base()` stays for code that needs a fresh base at run time (tests, scripts).
 """
 
 from __future__ import annotations
@@ -39,7 +49,9 @@ if TYPE_CHECKING:
 
 
 def make_base() -> type[DataclassBase]:
-    """A new declarative base with its own MetaData (so two apps' models never mix in one process)."""
+    """A new declarative base with its own MetaData (so two apps' models never mix in one process), for code that needs
+    one at run time. An app's models module writes its class out instead (see the module docstring): ty cannot
+    subclass the result."""
 
     class AppBase(MappedAsDataclass, DeclarativeBase):
         metadata = MetaData(naming_convention=NAMING_CONVENTION)

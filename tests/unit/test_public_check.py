@@ -44,6 +44,65 @@ def test_public_addresses_and_versions_are_not_private():
     assert list(public_check.scan_text("a.py", "8.8.8.8, version 10.2, 172.32.0.1")) == []
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        '"version": "10.0.0"',  # issue #13: npm versions in package.json and package-lock.json
+        '"node_modules/x": {"version": "10.4.2",',
+        "192.168.1 is a prefix, not an address",
+        "build 10.1.2.3.4",  # a longer dotted number
+        "id 110.0.0.1",
+        "v10.0.0.1",
+    ],
+)
+def test_versions_and_longer_numbers_are_not_addresses(text):
+    assert list(public_check.scan_text("package.json", text)) == []
+
+
+def test_an_address_at_the_end_of_a_sentence_still_counts():
+    (finding,) = public_check.scan_text("a.md", f"It listens on 10{DOT}0{DOT}0{DOT}5.")
+    assert finding.text == f"10{DOT}0{DOT}0{DOT}5"
+
+
+def test_ignore_comment_skips_built_in_patterns_but_not_owner_patterns():
+    marker = "strata-public-check" + ": ignore"
+    assert list(public_check.scan_text("a.py", f'EXAMPLE = "{EMAIL}"  # {marker}')) == []
+    (finding,) = public_check.scan_text("a.py", f"kitchen  # {marker}", public_check.deny_patterns("kitchen"))
+    assert finding.kind.startswith("matches")
+
+
+def test_exclude_from_pyproject_and_the_command_line(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv(public_check.DENY_ENV, raising=False)
+    (tmp_path / "web").mkdir()
+    (tmp_path / "web" / "package-lock.json").write_text(f'"resolved": "{EMAIL}"\n')
+    (tmp_path / "notes.md").write_text(f"{HOME}\n")
+    monkeypatch.chdir(tmp_path)
+    assert public_check.main(["."]) == 1
+    (tmp_path / "pyproject.toml").write_text('[tool.strata-public-check]\nexclude = ["web/package-lock.json"]\n')
+    assert public_check.config_excludes() == ["web/package-lock.json"]
+    capsys.readouterr()
+    assert public_check.main(["."]) == 1
+    assert "package-lock" not in capsys.readouterr().err
+    assert public_check.main([".", "--exclude", "*.md"]) == 0
+
+
+def test_an_excluded_file_is_still_checked_against_owner_patterns(tmp_path):
+    """Review finding: an exclude silences the built-in patterns only, never STRATA_PUBLIC_DENY."""
+    (tmp_path / "package-lock.json").write_text(f'"version": "10.0.0", "resolved": "{EMAIL}", "host": "kitchen-box"\n')
+    found = public_check.scan([tmp_path], public_check.deny_patterns("kitchen"), ["package-lock.json"])
+    assert [f.kind for f in found] == [f"matches {public_check.DENY_ENV} pattern"]
+    assert public_check.scan([tmp_path], [], ["package-lock.json"]) == []
+
+
+def test_exclude_matches_inside_an_sdist():
+    assert public_check.excluded("pkg-1.0.tar.gz/pkg-1.0/web/package-lock.json", ["web/package-lock.json"])
+    assert not public_check.excluded("web/package-lock.json.bak", ["web/package-lock.json"])
+
+
+def test_no_pyproject_means_no_excludes(tmp_path):
+    assert public_check.config_excludes(tmp_path) == []
+
+
 def test_owner_patterns_come_from_the_environment_and_are_not_printed(monkeypatch):
     monkeypatch.setenv(public_check.DENY_ENV, "\nkitchen-?box\n\n")
     patterns = public_check.deny_patterns()

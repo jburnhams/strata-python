@@ -6,6 +6,7 @@ no mocks. Tests that rewrite an app's models after importing them run strata-db 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -262,6 +263,83 @@ def test_models_are_typed_records_with_stable_constraint_names(app: Path):
     assert meta.naming_convention == db.NAMING_CONVENTION
     assert db.make_base() is not db.make_base()  # each app its own MetaData
     assert db.Base.metadata.naming_convention["pk"] == "pk_%(table_name)s"
+
+
+TYPED_MODELS = """
+from sqlalchemy import MetaData
+from sqlalchemy.orm import DeclarativeBase, Mapped, MappedAsDataclass, mapped_column
+
+from strata_python.db import NAMING_CONVENTION
+
+
+class Base(MappedAsDataclass, DeclarativeBase):
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
+
+
+class Photo(Base):
+    __tablename__ = "photos"
+    id: Mapped[int] = mapped_column(primary_key=True, init=False)
+    name: Mapped[str]
+
+
+ok = Photo(name="a")
+"""
+
+
+@pytest.mark.parametrize("checker", ["ty", "pyright"])
+def test_the_documented_base_passes_both_type_checkers(tmp_path: Path, checker: str):
+    """Issue #20: the base README step 8 shows passes the gate's checkers, and they check the dataclass constructor
+    through it (a misspelt argument is an error), so the pattern is not passing by being opaque."""
+    exe = shutil.which(checker, path=str(Path(sys.executable).parent))  # the venv's, with .exe on Windows
+    assert exe is not None
+    args = ["check", "--python", sys.executable] if checker == "ty" else ["--pythonpath", sys.executable]
+    (tmp_path / "models.py").write_text(TYPED_MODELS)
+    clean = subprocess.run([exe, *args, "models.py"], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    (tmp_path / "models.py").write_text(TYPED_MODELS + 'bad = Photo(nmae="a")\n')
+    typo = subprocess.run([exe, *args, "models.py"], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert typo.returncode != 0
+    assert "nmae" in typo.stdout
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_settings_in_a_table(backend: str, tmp_path: Path, isolated_env: Path):
+    """Issue #16: Settings bound to the database's settings table: the file is copied in once, list values round-trip,
+    None deletes, and saves from two threads at once lose nothing (the upsert, on both backends)."""
+    import threading
+
+    from sqlalchemy import MetaData
+
+    from strata_python.db.settings import TableStore, settings_table
+    from strata_python.settings import IMPORTED, ListSetting, Setting, Settings
+
+    meta = MetaData(naming_convention=db.NAMING_CONVENTION)
+    table = settings_table(meta)
+    keys = [f"k{i}" for i in range(8)]
+    s = Settings(
+        "demo", [Setting("slots", default="2"), ListSetting("roots", sep=","), *(Setting(k, default="") for k in keys)]
+    )
+    s.save({"slots": "3"})
+    with scratch_database(backend == "postgres") as url:
+        eng = scratch_engine(url)
+        meta.create_all(eng)  # a store test, not an app's schema: the table's own DDL is all it needs
+        try:
+            store = TableStore(eng, table)
+            s.bind(store)
+            assert store.load() == {"slots": "3", IMPORTED: s.path()}
+            s.save({"roots": "a,b", "slots": None})
+            assert (s.get_list("roots"), s.get("slots")) == (["a", "b"], "2")
+            threads = [threading.Thread(target=s.save, args=({k: "v"},)) for k in keys]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            assert all(s.get(k) == "v" for k in keys)
+            with eng.begin() as c:
+                c.execute(table.insert().values(key="slots", value="not json"))
+            assert "slots" not in store.load()
+        finally:
+            eng.dispose()
 
 
 def test_init_writes_config(app: Path):
@@ -789,6 +867,78 @@ def test_fixtures_on_postgres(pytester: pytest.Pytester, how: str, monkeypatch: 
     pytester.makepyfile(test_app=APP_TESTS)
     result = pytester.runpytest_inprocess(*(["--pg"] if how == "--pg" else []), "-p", "no:randomly")
     result.assert_outcomes(passed=4)
+
+
+OTHER_PG_PLUGIN = """
+def pytest_addoption(parser):
+    parser.addoption("--pg", action="store_true", dest="pg", help="the old database package's flag")
+"""
+
+SQLITE_APP_TESTS = """
+from sqlalchemy import text
+
+
+def test_session(db_session, db_backend):
+    assert db_backend == "sqlite"
+    db_session.execute(text("INSERT INTO authors (name) VALUES ('Ada')"))
+"""
+
+
+def test_another_plugins_pg_does_not_clash(pytester: pytest.Pytester):
+    """Issue #11 and #19: an app that still has the old database package installed (it adds --pg too) can run its
+    tests. The stand-in is loaded with -p, so it registers before this plugin's entry point, as in the report."""
+    root = make_app(pytester.path, PARENT_CHILD)
+    strata_db(root, "revision", "-m", "initial", "--sqlite")
+    pytester.makepyfile(other_pg=OTHER_PG_PLUGIN, test_app=SQLITE_APP_TESTS)
+    pytester.syspathinsert()
+    result = pytester.runpytest_inprocess("-p", "other_pg", "-p", "no:randomly")
+    result.assert_outcomes(passed=1)
+    assert "already added" not in result.stdout.str() + result.stderr.str()
+
+
+def test_pg_and_strata_pg_are_offered_once_on(pytester: pytest.Pytester):
+    root = make_app(pytester.path, PARENT_CHILD)
+    strata_db(root, "revision", "-m", "initial", "--sqlite")
+    pytester.makepyfile(test_app="def test_flags(pytestconfig):\n    assert pytestconfig.getoption('--pg') is False\n")
+    pytester.runpytest_inprocess("-p", "no:randomly").assert_outcomes(passed=1)
+    help_text = pytester.runpytest_inprocess("--help").stdout.str()
+    assert "--pg" in help_text
+    assert "--strata-pg" in help_text
+
+
+OFF_TESTS = """
+import os
+
+import psycopg
+
+from strata_python.db import guard
+
+
+def test_guard_is_off():
+    assert not guard._testing and os.environ.get("STRATA_DB_TESTING") != "1"
+    assert not getattr(psycopg, "_strata_db_guarded", False)
+
+
+def test_fixtures_say_they_are_off(db_session):
+    pass
+"""
+
+
+@pytest.mark.parametrize("why", ["no table", "strata_db = false"])
+def test_plugin_stays_off_without_the_project_asking(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, why):
+    """Issue #19: SQLAlchemy and Alembic being installed is not enough. With no [tool.strata-db] (or with it turned
+    off in the ini) the guard does not start and --pg is not taken. A subprocess, since the guard is per process."""
+    if why == "no table":
+        pytester.makepyprojecttoml('[project]\nname = "other"\nversion = "0"\n')
+    else:
+        make_app(pytester.path)
+        pyproject = pytester.path / "pyproject.toml"
+        pyproject.write_text(pyproject.read_text() + "\n[tool.pytest.ini_options]\nstrata_db = false\n")
+    monkeypatch.delenv(guard.TESTING, raising=False)  # this run's guard sets it; the child must decide for itself
+    pytester.makepyfile(test_off=OFF_TESTS, other_pg=OTHER_PG_PLUGIN)
+    result = pytester.runpytest_subprocess("-p", "no:randomly", "-p", "other_pg", "--pg")
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(["*strata_python.db fixtures are off*"])
 
 
 def test_a_failed_sqlite_migration_rolls_back_its_ddl(app: Path, tmp_path: Path):

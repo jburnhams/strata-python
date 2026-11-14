@@ -5,16 +5,17 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 | Module | What it gives an app |
 |---|---|
 | `strata_python.oslib` | Cross-platform file locks, process liveness (`pid_alive`), `kill_tree`, `lower_priority`, `venv_python`, `cli_command(module)` |
-| `strata_python.settings` | `Settings` / `Setting`: one JSON file in `~/.<app>` with `<APP>_*` environment overrides, validation (`absolute_path`, `non_empty`), atomic saves |
-| `strata_python.web` | `base_app` (health + settings routes), `add_web` (built web app or stand-in page at every non-API path), `with_base` (reverse-proxy-safe `<base href>`), `static_file` (path-safe), `serve` |
-| `strata_python.cli` | `add_doctor`, `add_set`, `add_serve` for the app's argparse subcommands |
+| `strata_python.settings` | `Settings` / `Setting` / `ListSetting`: one JSON file in `~/.<app>` with `<APP>_*` environment overrides, validation (`absolute_path`, `non_empty`, `number_between`, `whole_between`, `iso_date`, `boolean`), typed getters, atomic saves, and `bind(store)` to keep them elsewhere (`strata_python.db.settings.TableStore`) |
+| `strata_python.web` | `base_app` (health with the app's own fields + settings routes), `add_web` (built web app or stand-in page at every non-API path), `with_base` (reverse-proxy-safe `<base href>`), `static_file` (path-safe), `serve` |
+| `strata_python.cli` | `add_doctor` (imports, labels, optional modules and the app's own `Check`s), `add_set`, `add_serve` for the app's argparse subcommands |
+| `strata_python.clients.models` | The strata-models client, standard library only: `run`, `submit`, `wait`, `role_model`, `gpu_lease`, a shortcut for every role the service runs (`faces`, `face_kind`, `transcribe`, `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed`, `enhance_video`, and `ask` for the language models) and a typed result for each |
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
 | pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, and the `integration` marker on everything under `tests/integration` |
 | `strata_python.testing` | The fakes behind those fixtures (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) and the CLI runners `run_cli(main, *args)` and `run_module("myapp", *args, src=...)` |
-| `strata_python.db` (extra `[db]`) | The shared database: `connect("myapp")` (the app's schema of one shared Postgres, or a SQLite path), `make_base()` for typed models, Alembic migrations with no per-app `env.py`, the live-database guard, the `strata-db` command, and the `db_*` fixtures (SQLite by default, a throwaway Postgres with `--pg`) |
+| `strata_python.db` (extra `[db]`) | The shared database: `connect("myapp")` (the app's schema of one shared Postgres, or a SQLite path), a declarative base with the shared `NAMING_CONVENTION` for typed models, Alembic migrations with no per-app `env.py`, the live-database guard, the `strata-db` command, and the `db_*` fixtures (SQLite by default, a throwaway Postgres with `--pg`) |
 | `strata_python.pages` (extra `[pdf]`) | A scanned page described as blocks, lines, styled spans and figures in scan pixels, drawn as a PDF with real embedded fonts (`render`), and read back as pixels at the scan's dpi (`rasterise`) and as text (`read_text`): for rebuilding scanned books, and for scoring a rebuild with the renderer that prints it |
 | `strata-check` | The one gate: lockfile, ruff, `ruff format`, pyright strict, ty, unit tests with coverage |
-| `strata-public-check` | Fails on email addresses, private IPv4 addresses, home-folder paths and the regexes in `STRATA_PUBLIC_DENY` in a tree, sdist or wheel; run before anything public is published |
+| `strata-public-check` | Fails on email addresses, private IPv4 addresses, home-folder paths and the regexes in `STRATA_PUBLIC_DENY` in a tree, sdist or wheel; run before anything public is published. Silence a false positive with `[tool.strata-public-check] exclude = ["web/package-lock.json"]` (or `--exclude`), or `strata-public-check: ignore` on the line (never applies to `STRATA_PUBLIC_DENY`) |
 
 ## Move an app onto it
 
@@ -71,23 +72,34 @@ It runs the lockfile check, ruff, `ruff format`, pyright strict, ty and the unit
 Replace the app's `settings.py` (its key list, getters, file handling and environment lookups) with a declaration:
 
 ```python
-from strata_python.settings import Setting, Settings, absolute_path, non_empty
+from strata_python.settings import ListSetting, Setting, Settings, absolute_path, non_empty, whole_between
 
 SETTINGS = Settings(
-    "myapp",                                   # ~/.myapp/settings.json, moved with MYAPP_HOME
+    "myapp",  # ~/.myapp/settings.json, moved with MYAPP_HOME
     [
         Setting("data_dir", default=lambda: "/srv/myapp", normalise=absolute_path),
         Setting("greeting", default="Hello", normalise=non_empty),
+        Setting("workers", default="2", normalise=whole_between(1, 16)),
+        ListSetting("source_roots", item=absolute_path, env="MYAPP_SOURCES"),  # MYAPP_SOURCES split on os.pathsep
     ],
-    prefix="MYAPP",                            # only if the app already runs with other variable names
+    prefix="MYAPP",  # only if the app already runs with other variable names
 )
 
-SETTINGS.get("greeting")           # MYAPP_GREETING, else the file, else the default
+SETTINGS.get("greeting")  # MYAPP_GREETING, else the file, else the default
 SETTINGS.save({"greeting": "Hi"})  # validated and written atomically; None resets to the default
-SETTINGS.folder("data_dir")        # the value as a folder, created if missing
+SETTINGS.folder("data_dir")  # the value as a folder, created if missing
 ```
 
-Values are strings today. An app with int, float or list settings converts at the point of use (`int(SETTINGS.get("workers"))`, `SETTINGS.get("roots").split(os.pathsep)`) until typed settings land here.
+Values are canonical strings, and lists of them. Normalisers for the common kinds give one spelling each: `number_between(lo, hi)`, `whole_between(lo, hi)`, `iso_date(allow_blank=True)` and `boolean`, read back with `get_float`, `get_int` and `get_bool`. A `ListSetting` is a JSON list in the file (a string there is split, so a hand edit works), split on `sep` in the environment (`os.pathsep` by default, `sep=","` for names), with `item` normalising each entry. `get_list` returns it, and `all()` and `GET /api/settings` return it as JSON. `get` and `set` show it joined, and `save` takes a list or a joined string.
+
+To keep the values in the app's database instead of the file, add the table to the models and bind at service start, after the migrations. The file's values are copied in the first time, and the CLI and tests without a database keep using the file:
+
+```python
+from strata_python.db.settings import TableStore, settings_table
+
+SETTINGS_TABLE = settings_table(Base.metadata)        # in models.py, so the migrations create it
+SETTINGS.bind(TableStore(engine, SETTINGS_TABLE))     # any object with load() and update(changes) is a store
+```
 
 ### 4. The server
 
@@ -102,7 +114,7 @@ def create_app():
     return app
 ```
 
-Delete the app's own `/api/health` and `/api/settings` routes, its `/assets` mount, SPA fallback, `with_base` and `static_file` copies and its `uvicorn.run` wrapper. `web.serve(app, argv, default_port=...)` replaces the last of these. A route whose reply needs more than `{ok, version}` adds its own route beside them.
+Delete the app's own `/api/health` and `/api/settings` routes, its `/assets` mount, SPA fallback, `with_base` and `static_file` copies and its `uvicorn.run` wrapper. `web.serve(app, argv, default_port=...)` replaces the last of these. For health fields of the app's own, pass `health=lambda: {"gpu": gpu_name()}`: they follow `ok` and `version`, and may set `ok` to false. It runs on every request, so keep it cheap.
 
 ### 5. The CLI
 
@@ -116,8 +128,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="myapp")
     sub = parser.add_subparsers(dest="cmd", required=True)
     cli.add_doctor(sub, "myapp", __version__, ("fastapi", "uvicorn"))  # versions, and whether each import works
-    cli.add_set(sub, SETTINGS)                                          # myapp set KEY [VALUE|default]
-    cli.add_serve(sub, lambda host, port: web.serve(create_app(), ["--host", host, "--port", str(port)]), default_port=8000)
+    cli.add_set(sub, SETTINGS)  # myapp set KEY [VALUE|default]
+    cli.add_serve(
+        sub, lambda host, port: web.serve(create_app(), ["--host", host, "--port", str(port)]), default_port=8000
+    )
     # ... the app's own subcommands, each with set_defaults(fn=...) ...
     args = parser.parse_args(argv)
     return args.fn(args)
@@ -125,9 +139,39 @@ def main(argv=None):
 
 Delete the hand-written `doctor`, `set` and `serve` subparsers. Each app's port belongs in its deploy units, not in this library.
 
+A doctor that needs more than imports takes labels, optional modules, checks and its own hint, and prints every app's rows in the same columns:
+
+```python
+cli.add_doctor(
+    sub,
+    "myapp",
+    __version__,
+    ("fastapi", ("rawpy (DNG decoding)", "rawpy"), cli.Module("ultralytics", optional=True)),
+    checks=[cli.Check("ffmpeg", cli.program("ffmpeg", "apt install ffmpeg")), cli.Check("gpu", gpu_check)],
+    hint="uv sync (scripts/setup_env)",
+)
+```
+
+A check returns `(status, text)` with status `ok`, `missing`, `slow` (works, but not as it should; never fails) or `broken`, and an exception counts as `broken`. Doctor exits 1 when a required module or check is missing or broken. A check that may be missing without that being a fault is `Check(..., optional=True)`.
+
+### 5b. The strata-models client (apps that use the model service)
+
+Drop the `strata-models-client` path or git dependency and change the import. The functions, their arguments and the exceptions are the same:
+
+```python
+from strata_python.clients import models as sm   # was: import strata_models_client as sm
+
+page = sm.OcrPage.from_json(sm.ocr("/path/page.png", app="strata-scan"))   # typed: page.lines[0].words[0].box
+talk = sm.Transcript.from_json(sm.transcribe("/path/talk.wav", app="strata-360"))
+with sm.gpu_lease("strata-stills", vram_gb=4):
+    run_my_own_cuda_code()
+```
+
+The shortcuts still return the service's JSON, so existing code keeps working, and the result classes keep all of it in `.raw`. There is one shortcut for every role the service runs (`sm.ROLES`): `faces`, `face_kind`, `transcribe` (also `role="transcribe-fast"`), `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed` and `enhance_video`, plus `ask` for the language-model roles (`vision-language`, `text`, and the judges). Each has a result class (`Answer`, `GeneratedImage`, `Embeddings`, `FaceKinds`, `CleanAudio`, `AudioQuality`, `EnhancedVideo` and the four above). The roles `models.toml` lists without a runtime yet (sound-events, speaker-embedding, detect-people, upscale, denoise, nsfw) have none: `run(role, params, app)` reaches them once the service serves them.
+
 ### 6. OS helpers
 
-Delete the app's `oslib.py` and import from `strata_python.oslib`: `file_lock(f)`, `pid_alive(pid)`, `kill_tree(pid, sig)`, `lower_priority(nice)`, `venv_python(venv)` and `cli_command(module)`. `cli_command` now takes the module name (`cli_command("myapp")`). Local `alive(pid)`, `_alive` and `lower_priority()` copies go too. Helpers this library does not have yet (process-group supervision, load average) stay in the app until they move here, and the app's file says so.
+Delete the app's `oslib.py` and import from `strata_python.oslib`: `file_lock(f)`, `pid_alive(pid)`, `kill_tree(pid, sig)`, `lower_priority(nice, io=False)` (`io=True` for idle disk priority too; drop the app's `ionice` helper), `venv_python(venv)` and `cli_command(module)`. `cli_command` now takes the module name (`cli_command("myapp")`). Local `alive(pid)`, `_alive` and `lower_priority()` copies go too. Helpers this library does not have yet (process-group supervision, load average) stay in the app until they move here, and the app's file says so.
 
 ### 7. Tests
 
@@ -203,11 +247,22 @@ migrations = "migrations"        # the app's Alembic revisions, unchanged
 # engine = "postgres"            # only for an app that uses Postgres-only features
 ```
 
-- Imports: the old package's names come from `strata_python.db` (`connect`, `session`, `make_base`, `Project`, `upgrade`, `drift`, `check_migrations`, `LiveDatabaseRefused`); the standard tests from `strata_python.db.testing`. The naming convention is byte-identical, so existing revisions and databases do not drift.
+- Imports: the old package's names come from `strata_python.db` (`connect`, `session`, `NAMING_CONVENTION`, `Project`, `upgrade`, `drift`, `check_migrations`, `LiveDatabaseRefused`); the standard tests from `strata_python.db.testing`. The naming convention is byte-identical, so existing revisions and databases do not drift.
+- Models: write the base class out, not `Base = make_base()`, which ty rejects as a base (`unsupported-base`) and so fails the gate:
+
+  ```python
+  from sqlalchemy import MetaData
+  from sqlalchemy.orm import DeclarativeBase, MappedAsDataclass
+  from strata_python.db import NAMING_CONVENTION
+
+
+  class Base(MappedAsDataclass, DeclarativeBase):
+      metadata = MetaData(naming_convention=NAMING_CONVENTION)
+  ```
 - Environment: `STRATA_DB_LIVE=1` in the service unit (next to the old variable until every app has moved), and `STRATA_DB_DATABASE` naming the shared database. It has no built-in name any more, because that name is the owner's and this package is public; set it once where the services get their environment. `STRATA_DB_URL` and `<APP>_DATABASE_URL` work as before. Tests and CI: `STRATA_DB_TEST_ADMIN_URL`, `STRATA_DB_TEST=postgres`.
 - Commands: `strata-db revision -m "..."`, `strata-db check`, `strata-db migrate --live`, `strata-db current --live`, `strata-db new-app`, `strata-db init` (or `python -m strata_python.db`).
 - At service start (only there): `Project.load(__file__).upgrade(connect("myapp"))`.
-- Tests: the plugin is registered with every install and does nothing until the extra is there. Then `db_session`, `db_engine`, `db_url` (a URL for code that builds its own engine), `db_env` (points the app's own `connect("myapp")` at the test database; make it autouse in `conftest.py` for an app that connects by itself), `db_backend`, `db_project`. Migrations run once into a template and each test gets a copy, so a test costs a file copy. `pytest --pg` runs the same tests on a private Postgres the run starts for itself (needs the PostgreSQL server binaries), or on `STRATA_DB_TEST_ADMIN_URL`. Add the standard tests once:
+- Tests: the plugin is registered with every install and does nothing until the extra is installed and the project has `[tool.strata-db]` (or `strata_db = true` in `[tool.pytest.ini_options]`; `strata_db = false` turns it off). So an app can take a 0.2.x release before it moves its database, even with the old database package still installed. Then `db_session`, `db_engine`, `db_url` (a URL for code that builds its own engine), `db_env` (points the app's own `connect("myapp")` at the test database; make it autouse in `conftest.py` for an app that connects by itself), `db_backend`, `db_project`. Migrations run once into a template and each test gets a copy, so a test costs a file copy. `pytest --pg` (or `--strata-pg`, which no other plugin can take) runs the same tests on a private Postgres the run starts for itself (needs the PostgreSQL server binaries), or on `STRATA_DB_TEST_ADMIN_URL`. Add the standard tests once:
 
   ```python
   # tests/unit/test_database.py

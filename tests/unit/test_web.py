@@ -5,7 +5,7 @@ import urllib.request
 import pytest
 
 from strata_python import web
-from strata_python.settings import Setting, Settings, absolute_path
+from strata_python.settings import ListSetting, Setting, Settings, absolute_path
 
 
 def test_with_base_points_back_at_the_root():
@@ -124,3 +124,29 @@ def test_no_built_app_and_no_landing_is_a_404(static, live_app):
     with live_app(a) as base:
         assert get(base + "/")[0] == 404
         assert get(base + "/api/docs")[0] == 404
+
+
+def test_health_carries_the_apps_own_fields(live_app):
+    """Issue #17: strata-models' `{ok, version, gpu}`, called per request, and able to say the service cannot work."""
+    state = {"gpu": "RTX 4090"}
+    app = web.base_app(
+        "models", "2.0", health=lambda: {"gpu": state["gpu"]} if state["gpu"] else {"ok": False, "gpu": None}
+    )
+    with live_app(app) as base:
+        assert json.loads(get(base + "/api/health")[1]) == {"ok": True, "version": "2.0", "gpu": "RTX 4090"}
+        state["gpu"] = ""
+        assert json.loads(get(base + "/api/health")[1]) == {"ok": False, "version": "2.0", "gpu": None}
+
+
+def test_list_settings_over_real_http(live_app, tmp_path):
+    """Issue #10: GET returns a list setting as a JSON list, PUT takes a list (or a joined string), a bad item is a 400."""
+    s = Settings("demo", [ListSetting("source_roots", item=absolute_path), ListSetting("names", sep=",")])
+    a, b = str(tmp_path / "a"), str(tmp_path / "b")
+    with live_app(web.base_app("demo", "1", s)) as base:
+        assert json.loads(get(base + "/api/settings")[1]) == {"source_roots": [], "names": []}
+        status, text = put(base + "/api/settings", {"source_roots": [a, b], "names": "x,y"})
+        assert status == 200
+        assert json.loads(text) == {"source_roots": [a, b], "names": ["x", "y"]}
+        status, text = put(base + "/api/settings", {"source_roots": ["relative"]})
+        assert status == 400
+        assert "absolute" in text

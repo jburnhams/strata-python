@@ -11,26 +11,34 @@ unless the db extra is installed: nothing here imports SQLAlchemy until a fixtur
 
 Default backend: SQLite. The migrations run ONCE per session into a template; each test gets a copy (in memory for
 db_engine, a file for db_url), so a test costs a copy, not a migration.
-`pytest --pg` (or STRATA_DB_TEST=postgres, or engine = "postgres" in the project) uses a real Postgres instead:
+`pytest --pg` (also `--strata-pg`; or STRATA_DB_TEST=postgres, or engine = "postgres" in the project) uses a real Postgres instead:
 a template database is migrated once and each test gets `CREATE DATABASE ... TEMPLATE` (a file copy on the server,
 milliseconds), dropped afterwards. That server is a throwaway one, never the real server: STRATA_DB_TEST_ADMIN_URL
 if set (CI), otherwise a private server started for the run (strata_python.db.testserver).
 
-With the extra installed, loading this plugin switches on the test guard (strata_python.db.guard) before conftest.py
-or any app module is imported: for the whole run, every Postgres connection in the process (connect(),
+When is it on? Only for an app that uses strata_python.db: SQLAlchemy and Alembic are installed (the db extra) AND
+the project says so, by a [tool.strata-db] table in its pyproject.toml (found from pytest's rootdir upwards) or by
+`strata_db = true` in its pytest ini options (`strata_db = false` turns it off whatever else is there). Having
+SQLAlchemy and Alembic installed by some other package is not enough (issue #19): such an app, or one still on the old
+database package, must be able to run pytest with this plugin registered and inert.
+
+When it is on, the plugin switches on the test guard (strata_python.db.guard) in pytest_load_initial_conftests, before
+conftest.py or any app module is imported (or, when it is loaded from a conftest.py itself, as in this repo's own
+tests, in pytest_configure, before any test runs): for the whole run, every Postgres connection in the process (connect(),
 create_engine(), psycopg.connect()) and in its subprocesses (STRATA_DB_TESTING=1) is refused unless it is a
 throwaway strata_db_* database. A test that would reach the shared database fails with LiveDatabaseRefused instead.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import tempfile
 from collections.abc import Iterator
 from importlib.util import find_spec
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -44,25 +52,71 @@ if TYPE_CHECKING:
 
 TEST_BACKEND = "STRATA_DB_TEST"
 INSTALLED = find_spec("sqlalchemy") is not None and find_spec("alembic") is not None
-
-if INSTALLED:
-    guard.enter_test_mode()  # at import: before conftest.py and the app's modules are loaded
+INI = "strata_db"
+PG_DEST = "strata_db_pg"
+PG_HELP = "run strata_python.db fixtures on a throwaway PostgreSQL"
+_ACTIVE = pytest.StashKey[bool]()  # per Config, not a module global: pytester runs nested sessions in one process
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    parser.addoption("--pg", action="store_true", help="run strata_python.db fixtures on a throwaway PostgreSQL")
+    # Only names of our own here: another plugin (the old database package) may also add --pg, and two addoption
+    # calls for one name raise. --pg itself is added once we know the plugin is on (_activate).
+    parser.addoption("--strata-pg", action="store_true", dest=PG_DEST, help=PG_HELP)
+    parser.addini(INI, type="bool", default=None, help="turn the strata_python.db fixtures and test guard on or off")
+
+
+def active(config: pytest.Config) -> bool:
+    """Whether this run uses strata_python.db (see the module docstring)."""
+    if not INSTALLED:
+        return False
+    wanted = cast("bool | None", config.getini(INI))
+    if wanted is not None:
+        return bool(wanted)
+    from .project import find_table
+
+    return find_table(config.rootpath) is not None
+
+
+def _activate(config: pytest.Config, parser: pytest.Parser | None) -> None:
+    if _ACTIVE in config.stash:
+        return
+    config.stash[_ACTIVE] = on = active(config)
+    if not on:
+        return
+    guard.enter_test_mode()
+    if parser is not None:  # still before the full command line is parsed, so --pg given there is recognised
+        # ValueError: another plugin (the old database package) has --pg; it means the same, and db_backend reads it
+        with contextlib.suppress(ValueError):
+            parser.addoption("--pg", action="store_true", dest=PG_DEST, help=PG_HELP)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_load_initial_conftests(early_config: pytest.Config, parser: pytest.Parser) -> None:
+    _activate(early_config, parser)  # entry point or -p: before conftest.py and the app's modules are imported
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    _activate(config, None)  # loaded from a conftest.py (pytest_plugins): the hook above has already run
 
 
 @pytest.fixture(scope="session")
 def db_project(request: pytest.FixtureRequest) -> Project:
     from .project import Project
 
+    if not request.config.stash.get(_ACTIVE, False):
+        pytest.fail(
+            "the strata_python.db fixtures are off: they need the db extra (strata-python[db]) and a [tool.strata-db]"
+            f" table in pyproject.toml, or {INI} = true in the pytest ini options",
+            pytrace=False,
+        )
     return Project.load(request.config.rootpath)
 
 
 @pytest.fixture(scope="session")
 def db_backend(request: pytest.FixtureRequest, db_project: Project) -> str:
-    pg = request.config.getoption("--pg") or os.environ.get(TEST_BACKEND) == "postgres" or db_project.postgres_only
+    cfg = request.config
+    pg = cfg.getoption(PG_DEST) or cfg.getoption("--pg", default=False)  # ours, or another plugin's --pg
+    pg = pg or os.environ.get(TEST_BACKEND) == "postgres" or db_project.postgres_only
     return "postgres" if pg else "sqlite"
 
 

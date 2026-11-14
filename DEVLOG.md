@@ -4,6 +4,83 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**The strata-models client moves in as `strata_python.clients.models` (issue #18; branch `claude/project-thread-vzy9v6`)**
+
+Apps installed strata-models' client from a path or a git URL into their own venvs. The library rules say a strata service's client belongs here. The owner chose standard library and dataclasses for it, with no pydantic and no `[models]` extra, because the client is called from code and does not validate requests. That replaces the morning's note about `strata_python.services.models` on pydantic.
+
+- `src/strata_python/clients/__init__.py`, `src/strata_python/clients/models.py` **new**: the client's code as it is in strata-models' `client/` (same names, defaults, long-poll and lease steps), fully annotated, with typed result shapes for the roles apps call today: `ocr`, `transcribe`, `faces` and `speak`, read from the service's runtimes (`runtimes/tesseract.py`, `workers/whisper.py`, `runtimes/faces.py`, `workers/tts.py`). The shortcuts still return the JSON, so a move is one import line, and each shape keeps the whole reply in `raw`. The issue also named `image-describe`, `font-match` and `page-build`, but the service has no `image-describe` role (that is `vision-language`) and the other two do not exist yet, so they are left until it serves them.
+- `tests/unit/test_clients_models.py` **new**: a stand-in service in FastAPI over real HTTP (`live_app`), covering the shortcuts' requests, the typed shapes, a failed job, a refused request, a 503, no service, a wait that times out, a lease with heartbeats and release, a queued lease withdrawn after its timeout, and `gpu_lease` with no service.
+- `README.md` (module table, step 5b), `AGENTS.md` (layout), `CHANGELOG.md`.
+- Every role the service runs, as the owner asked after the first version: the roles in `models.toml` whose runtime is in `runtimes.RUNTIMES` (16 of 22), with params and result shapes from each runtime's docstring (`runtimes/llama.py` and `runtimes/cloud.py` for `ask`, `sdcpp.py`, `clip.py`, `facekind.py`, `workers/audio.py`, `workers/audio_quality.py`, `workers/video.py`). The other six (sound-events, speaker-embedding, detect-people, upscale, denoise, nsfw) have models listed but no runtime (`transformers`, `speechbrain`, `ultralytics`, `spandrel`, `nudenet` are not in `RUNTIMES`), so they are left out until the service serves them. A test keeps `ROLES` and the stand-in's results the same set.
+- Left for strata-models: test the client against its real API in its integration suite, then delete `client/`.
+
+
+**Settings: typed values, lists and a pluggable store (issues #10, #16; branch `claude/project-thread-vzy9v6`)**
+
+strata-stills could not adopt `Settings` because two of its settings are lists, and strata-models because its settings move into a database table and it has numbers, ranges and dates. Both kept a copy of `settings.py`. Typed int, float and bool settings were left as normalisers plus getters, not new kinds. The values stay canonical strings, so the file is still hand-editable and every existing app reads the same. Only lists needed a new kind.
+
+- `src/strata_python/settings.py`: `number_between`, `whole_between`, `iso_date`, `boolean`; `get_int`, `get_float`, `get_bool`, `get_list` and `value`; `ListSetting`; `SettingsStore` (a protocol: `load`, `update`), `JsonFileStore`, which is the old file code moved as it was, lock and atomic replace included, and `Settings(store=)`, `Settings.file` and `bind(store, import_file=True)`, which copies the file's valid values in once and leaves a marker row. Each kind parses through one `parse` method, so the environment, the store and `save` agree on what a value is.
+- `src/strata_python/db/settings.py` **new**: `settings_table(metadata)` (key, value as JSON text, the same on both backends) and `TableStore`, an upsert per key in one transaction so concurrent saves of different keys keep both.
+- `src/strata_python/web.py`: the settings routes carry lists.
+- `tests/unit/test_settings.py`: each normaliser and getter, lists from the file, the environment and `save`, a hand-edited list file, `bind` copying once and not again. `tests/unit/test_db.py`: the table store on SQLite and Postgres with concurrent saves. `tests/unit/test_web.py`: lists over real HTTP. `tests/unit/test_cli.py`: `set` on a list.
+- `README.md` (module table, step 3), `AGENTS.md` (layout), `CHANGELOG.md`.
+
+
+**Doctor checks and health fields an app can add (issues #15, #17; branch `claude/project-thread-vzy9v6`)**
+
+strata-stills and strata-models each kept their own `doctor`, and strata-models its own `/api/health`, because the shared ones could not be extended. The two issues asked for the same doctor hook in two shapes (`(ok | None, line)` and a four-word status); this takes the four-word one, which says more, with `optional=` for the "not available, not a failure" case.
+
+- `src/strata_python/cli.py`: `Module`, `Check`, `Status`, `program()` and `doctor()`; `add_doctor` takes `checks` and `hint`. Rows keep the existing columns (a failing row is upper case, as `MISSING` was), and a check that raises is a `broken` row rather than a crashed doctor. Shared GPU checks (torch present, a device, a kernel runs) are left for when an app moves its doctor here and shows the exact checks it needs.
+- `src/strata_python/web.py`: `base_app(health=...)`, merged after `ok` and `version`, called per request.
+- `tests/unit/test_cli.py`, `tests/unit/test_web.py`: labels, optional modules, each status, a crashing check, a missing program with its hint, `add_doctor` passing them through; health fields over real HTTP, including `ok` turned false.
+- `README.md` (module table, steps 4 and 5), `CHANGELOG.md`.
+
+
+**Models: declare the base class, since ty cannot subclass `make_base()` (issue #20; branch `claude/project-thread-vzy9v6`)**
+
+strata-stills found that ty reports `unsupported-base` on `class Photo(Base)` when `Base = make_base()`, and the gate fails on ty's warnings. Reproduced with this repo's ty: a value typed `type[DataclassBase]` has no MRO ty can know. pyright accepts it, which is why PR #7's checks passed.
+
+- Considered a shared base class to subclass instead (the issue's second option): it cannot work, because SQLAlchemy gives a registry and MetaData only to a *direct* subclass of DeclarativeBase, so every app's tables would share one MetaData. So the docs show the two-line class with `NAMING_CONVENTION` (the issue's first option) and `make_base()` stays for run-time use.
+- `src/strata_python/db/models.py`, `src/strata_python/db/__init__.py`: docstrings show the class and say why.
+- `tests/unit/test_db.py`: ty and pyright run on a models file written the documented way; both pass it, and both fail a misspelt constructor argument, so the check sees through the base.
+- `README.md` (module table, step 8), `CHANGELOG.md`.
+
+
+**`oslib.lower_priority(io=True)` (issue #12; branch `claude/project-thread-vzy9v6`)**
+
+Three strata-stills scripts each carry `os.nice(15)` plus `ionice -c3 -p <pid>`; it moved the CPU half to `lower_priority` and kept the I/O half, which belongs here.
+
+- `src/strata_python/oslib.py`: `io=True` calls `ioprio_set` (idle class) through `ctypes` on the Linux architectures in a small syscall table, falling back to `ionice` elsewhere or when refused; `PROCESS_MODE_BACKGROUND_BEGIN` on Windows (this process only: Windows does not pass background mode on); `setiopolicy_np` throttling on macOS, excluded from coverage since no CI leg counts it. All best effort, as the CPU part was.
+- `tests/unit/test_oslib.py`: each path aimed at a child process (the internal helper takes a pid, so the test process keeps its own priority) and read back with `ionice`, the syscall path with `ionice` hidden so a fallback cannot pass for it; and the public call in a child, whose own child inherits the class. They failed before the change.
+- `README.md` (step for `oslib`), `CHANGELOG.md`.
+
+
+**Release workflow: check the token before pushing anything (issue #8; branch `claude/project-thread-vzy9v6`)**
+
+The release after #7 pushed its bump branch and then failed at the first `gh` call with "invalid header field value for Authorization", most likely a trailing newline in the pasted `RELEASE_TOKEN` (git base64-encodes it, `gh` sends it raw). The secret was re-saved and 0.2.1 is on PyPI; this makes a bad token fail first, with a message saying what to fix.
+
+- `.github/workflows/release.yml`: a first step that fails when the secret is empty or holds whitespace, then reads the repository with it. It does not trim the token, as the issue offered: the checkout and release actions take the secret as it is, so a trimmed copy would only move the failure later.
+
+
+**`strata-public-check`: versions are not addresses, and a way to silence what is left (issue #13; branch `claude/project-thread-vzy9v6`)**
+
+An app with a web front end got 28 findings, most of them npm versions (`10.0.0`, `10.4.2`) matched as private IPv4 addresses, because the pattern took two or three parts after the prefix. It also found real home-folder paths in two of that app's files, so the check is worth having there once it is quiet.
+
+- `src/strata_python/public_check.py`: the address pattern takes exactly four parts and not inside a longer run of digits and dots; `exclude` globs from `[tool.strata-public-check]` in ./pyproject.toml and `--exclude`, matched against a path or its end (an sdist's member path carries the sdist's folder); `strata-public-check: ignore` on a line skips the built-in patterns there. Both deliberately leave the owner's `STRATA_PUBLIC_DENY` patterns alone, so an excluded file is still checked against them (a review finding on the first version, which skipped it whole): they live in a secret, and an exception for one would have to be written in the public repo.
+- `tests/unit/test_public_check.py`: versions and longer dotted numbers, an address before a full stop, the ignore marker (and that it does not cover deny patterns), excludes from pyproject.toml, the command line and inside an sdist.
+- `README.md` (the module table), `CHANGELOG.md`.
+
+
+**The db pytest plugin switches on only for apps that use it, and its `--pg` no longer clashes (issues #11, #19; branch `claude/project-thread-vzy9v6`)**
+
+Two apps reported that with 0.2.1 installed pytest would not start when the old database package was installed too: both plugins add `--pg`, and a second `addoption` for a name raises. The plugin also switched its guard on whenever SQLAlchemy and Alembic were importable, which refuses the old package's throwaway databases in the same run. So an app could not take 0.2.x first and move its database later, the order README step 8 suggests.
+
+- `src/strata_python/db/pytest_plugin.py`: "on" now means the extra is installed and the project asks (`[tool.strata-db]` from the rootdir up, or the new `strata_db` ini option, which wins either way). The guard starts in `pytest_load_initial_conftests` (still before conftest.py and the app's modules; `pytest_configure` when the plugin is loaded from a conftest.py, as here) instead of at import. `pytest_addoption` adds only names of our own (`--strata-pg`, the ini option); `--pg` is added once on, after every entry-point plugin has added its options, and a `ValueError` there means another plugin owns `--pg`, whose value `db_backend` reads. The state is in `config.stash`, since pytester runs nested sessions in one process. A fixture used while the plugin is off fails saying what turns it on, rather than running unguarded.
+- `src/strata_python/db/project.py`: `find_table()`, the standard-library half of `Project.load`, so the plugin can ask without SQLAlchemy.
+- `pyproject.toml`: `strata_db = true` for this repo's own tests.
+- `tests/unit/test_db.py`: a stand-in plugin that adds `--pg` first; `--pg` and `--strata-pg` offered once on; the plugin off (guard not started, drivers not wrapped, `--pg` left to the other plugin, fixtures failing with the reason) with no table and with `strata_db = false`, in a subprocess since the guard is per process. All four failed before the change.
+- `README.md` (step 8, tests), `AGENTS.md` (the db plugin rule), `CHANGELOG.md`.
+
 **Scanned pages drawn as PDFs: `strata_python.pages` (branch `claude/project-thread-dvu0cz`, issue #9)**
 
 The owner wants evals of how close a rebuilt PDF of a scanned book page gets to the cleaned scan (layout, figures, typefaces), with strata-models owning the models and the scoring, and the rendering here so the apps that print rebuilt books (strata-scan first) draw with the code that was scored.

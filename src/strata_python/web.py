@@ -10,7 +10,7 @@ assets are relative (Vite `base: './'`)."""
 
 import argparse
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -36,8 +36,17 @@ def static_file(static: str, path: str) -> str | None:
     return full if os.path.dirname(full) == root and os.path.isfile(full) else None
 
 
-def base_app(title: str, version: str, settings: Settings | None = None, *, docs: bool = True) -> FastAPI:
-    """A FastAPI app with `GET /api/health` and, given settings, `GET`/`PUT /api/settings` (a PUT with an unknown key or a value that fails validation is a 400 and changes nothing)."""
+def base_app(
+    title: str,
+    version: str,
+    settings: Settings | None = None,
+    *,
+    docs: bool = True,
+    health: Callable[[], Mapping[str, object]] | None = None,
+) -> FastAPI:
+    """A FastAPI app with `GET /api/health` and, given settings, `GET`/`PUT /api/settings` (a PUT with an unknown key or a value that fails validation is a 400 and changes nothing).
+    `health` adds the app's own fields to the health response after `ok` and `version` (strata-models' `gpu`); it is called on every request, so keep it cheap,
+    and it may set `ok` to false for a service that is up but cannot do its work."""
     app = FastAPI(
         title=title,
         docs_url="/api/docs" if docs else None,
@@ -46,16 +55,16 @@ def base_app(title: str, version: str, settings: Settings | None = None, *, docs
 
     @app.get("/api/health")
     def get_health() -> dict[str, object]:  # pyright: ignore[reportUnusedFunction]
-        return {"ok": True, "version": version}
+        return {"ok": True, "version": version, **(health() if health else {})}
 
     if settings is not None:
 
         @app.get("/api/settings")
-        def get_settings() -> dict[str, str]:  # pyright: ignore[reportUnusedFunction]
+        def get_settings() -> dict[str, str | list[str]]:  # pyright: ignore[reportUnusedFunction]
             return settings.all()
 
         @app.put("/api/settings")
-        def put_settings(changes: dict[str, str | None]) -> dict[str, str]:  # pyright: ignore[reportUnusedFunction]
+        def put_settings(changes: dict[str, str | list[str] | None]) -> dict[str, str | list[str]]:  # pyright: ignore[reportUnusedFunction]
             try:
                 settings.save(changes)
             except (KeyError, ValueError) as e:

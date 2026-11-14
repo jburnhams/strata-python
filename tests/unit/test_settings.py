@@ -3,7 +3,18 @@ import os
 
 import pytest
 
-from strata_python.settings import Setting, Settings, absolute_path, non_empty
+from strata_python.settings import (
+    IMPORTED,
+    ListSetting,
+    Setting,
+    Settings,
+    absolute_path,
+    boolean,
+    iso_date,
+    non_empty,
+    number_between,
+    whole_between,
+)
 
 
 @pytest.fixture
@@ -123,3 +134,130 @@ def test_an_explicit_prefix_names_the_variables(monkeypatch, isolated_env):
     assert s.get("greeting") == "Yo"
     assert s.env_name("greeting") == "MA_GREETING"
     assert os.path.basename(Settings("my-app", []).home()) == ".my-app"  # the folder is still named for the app
+
+
+# --- typed values, lists and stores (issues #10 and #16) ---
+
+
+def test_number_whole_date_and_bool_normalisers_give_one_spelling():
+    gb = number_between(0, 64)
+    assert [gb(v) for v in (" 8 ", "8.50", "0", "64")] == ["8", "8.5", "0", "64"]
+    for bad in ("65", "-1", "nan", "inf", "lots"):
+        with pytest.raises(ValueError, match="number"):
+            gb(bad)
+    slots = whole_between(1, 16)
+    assert slots(" 4 ") == "4"
+    for bad in ("0", "17", "4.0", ""):
+        with pytest.raises(ValueError, match="whole number"):
+            slots(bad)
+    day = iso_date()
+    assert (day("2026-11-14"), day("  ")) == ("2026-11-14", "")
+    for bad in ("2026-02-30", "20261114", "14/11/2026"):
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            day(bad)
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        iso_date(allow_blank=False)("")
+    assert [boolean(v) for v in ("Yes", "1", "off", "FALSE")] == ["true", "true", "false", "false"]
+    with pytest.raises(ValueError, match="true or false"):
+        boolean("maybe")
+
+
+@pytest.fixture
+def typed(isolated_env):
+    return Settings(
+        "demo",
+        [
+            Setting("vram_gb", default="8", normalise=number_between(0, 64)),
+            Setting("slots", default="2", normalise=whole_between(1, 16)),
+            Setting("until", default="", normalise=iso_date()),
+            Setting("gpu", default="false", normalise=boolean),
+            ListSetting("source_roots", item=absolute_path, env="DEMO_SOURCES"),
+            ListSetting("db_reads", default=("photos",), sep=","),
+        ],
+    )
+
+
+def test_typed_getters(typed):
+    typed.save({"vram_gb": "12.5", "slots": 4, "gpu": "yes"})  # a number from JSON is accepted as its text
+    assert (typed.get_float("vram_gb"), typed.get_int("slots"), typed.get_bool("gpu")) == (12.5, 4, True)
+    assert typed.load()["slots"] == "4"
+    with pytest.raises(ValueError, match="slots: must be a whole number from 1 to 16"):
+        typed.save({"slots": "40"})
+    typed.save({"until": "2026-12-01"})
+    typed.save({"until": ""})  # a blank date clears the value without resetting it
+    assert typed.load()["until"] == ""
+
+
+def test_list_settings_from_the_file_the_environment_and_save(typed, monkeypatch, isolated_env):
+    a, b = str(isolated_env / "a"), str(isolated_env / "b")
+    assert typed.get_list("source_roots") == []
+    assert typed.get_list("db_reads") == ["photos"]
+    typed.save({"source_roots": [a, " ", b]})  # blank entries dropped
+    assert typed.load()["source_roots"] == [a, b]
+    assert typed.get("source_roots") == os.pathsep.join([a, b])
+    typed.save({"db_reads": "photos, faces,"})  # a joined string, as `set` and a hand edit give
+    assert typed.get_list("db_reads") == ["photos", "faces"]
+    monkeypatch.setenv("DEMO_SOURCES", b)
+    assert typed.get_list("source_roots") == [b]
+    assert typed.all()["source_roots"] == [b]
+    with pytest.raises(ValueError, match="source_roots: must be an absolute path"):
+        typed.save({"source_roots": ["relative"]})
+    with pytest.raises(TypeError):
+        typed.get_list("slots")
+
+
+def test_a_hand_edited_list_file(typed, isolated_env):
+    a = str(isolated_env / "a")
+    os.makedirs(typed.home())
+    with open(typed.path(), "w", encoding="utf8") as f:
+        json.dump({"source_roots": a, "db_reads": [1, 2]}, f)  # a string is split; a list of numbers is ignored
+    assert typed.get_list("source_roots") == [a]
+    assert typed.get_list("db_reads") == ["photos"]
+
+
+class DictStore:
+    """A store kept in memory, standing in for a database table: the protocol is all Settings needs."""
+
+    def __init__(self, rows=None):
+        self.rows = dict(rows or {})
+
+    def load(self):
+        return dict(self.rows)
+
+    def update(self, changes):
+        for k, v in changes.items():
+            if v is None:
+                self.rows.pop(k, None)
+            else:
+                self.rows[k] = v
+        return dict(self.rows)
+
+
+def test_bind_copies_the_files_values_once_then_uses_the_store(typed):
+    typed.save({"slots": "3", "db_reads": ["a"]})
+    with open(typed.path(), "r+", encoding="utf8") as f:  # a bad value in the file is not carried over
+        d = json.load(f)
+        d["vram_gb"] = "999"
+        f.seek(0)
+        json.dump(d, f)
+        f.truncate()
+    store = DictStore()
+    typed.bind(store)
+    assert store.rows == {"slots": "3", "db_reads": ["a"], IMPORTED: typed.path()}
+    typed.save({"slots": "5"})
+    assert store.rows["slots"] == "5"
+    assert typed.file.load()["slots"] == "3"  # the file is left as it was
+    assert typed.get_int("slots") == 5
+    store.rows["slots"] = "6"
+    typed.bind(store)  # the marker is there: the file is not copied over the store's values again
+    assert typed.get_int("slots") == 6
+
+
+def test_a_store_given_up_front_and_bind_without_import(isolated_env):
+    store = DictStore({"greeting": "Hi"})
+    s = Settings("demo", [Setting("greeting", default="Hello")], store=store)
+    assert s.get("greeting") == "Hi"
+    other = DictStore()
+    s.bind(other, import_file=False)
+    assert other.rows == {}
+    assert s.get("greeting") == "Hello"
