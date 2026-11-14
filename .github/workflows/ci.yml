@@ -13,6 +13,8 @@ concurrency:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    env:
+      STRATA_TEST_PG: ${{ matrix.os != 'macos-latest' && '1' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -30,6 +32,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
       - run: uv sync --locked
+      # strata_python.db's Postgres tests start a private throwaway server from the PostgreSQL binaries. The Linux
+      # and Windows images ship them (Windows sets PGBIN); STRATA_TEST_PG=1 makes a missing server fail those tests
+      # instead of skipping them. macOS has none, so they skip there and say so.
+      - name: PostgreSQL server binaries
+        if: matrix.os == 'ubuntu-latest'
+        run: ls /usr/lib/postgresql/*/bin/initdb || (sudo apt-get update && sudo apt-get install -y postgresql)
       - name: Lockfile, lint, format and types (once, on the newest Python)
         if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'
         run: uv run --locked strata-check --fast

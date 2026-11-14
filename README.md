@@ -11,6 +11,7 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
 | pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, and the `integration` marker on everything under `tests/integration` |
 | `strata_python.testing` | The fakes behind those fixtures (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) and the CLI runners `run_cli(main, *args)` and `run_module("myapp", *args, src=...)` |
+| `strata_python.db` (extra `[db]`) | The shared database: `connect("myapp")` (the app's schema of one shared Postgres, or a SQLite path), `make_base()` for typed models, Alembic migrations with no per-app `env.py`, the live-database guard, the `strata-db` command, and the `db_*` fixtures (SQLite by default, a throwaway Postgres with `--pg`) |
 | `strata-check` | The one gate: lockfile, ruff, `ruff format`, pyright strict, ty, unit tests with coverage |
 | `strata-public-check` | Fails on email addresses, private IPv4 addresses, home-folder paths and the regexes in `STRATA_PUBLIC_DENY` in a tree, sdist or wheel; run before anything public is published |
 
@@ -186,6 +187,37 @@ What every test gets:
 
 `strata_python.testing` holds the classes behind them (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) for a test that needs one directly. Prefer the real thing: `http_server` over `fake_urlopen`, the actual program over `fake_run`. A fake is for a true external edge where speed matters.
 
+### 8. Database (apps with one)
+
+Replaces the git-pinned database package, with the same behaviour under new names.
+
+```toml
+# pyproject.toml
+dependencies = ["strata-python[db]>=0.2,<0.3"]   # SQLAlchemy 2, Alembic, psycopg 3
+
+[tool.strata-db]                 # was the old package's own table: rename it, the keys are the same
+app = "myapp"                    # owner role and schema (lower case, digits, _)
+models = "myapp.models:Base"
+migrations = "migrations"        # the app's Alembic revisions, unchanged
+# engine = "postgres"            # only for an app that uses Postgres-only features
+```
+
+- Imports: the old package's names come from `strata_python.db` (`connect`, `session`, `make_base`, `Project`, `upgrade`, `drift`, `check_migrations`, `LiveDatabaseRefused`); the standard tests from `strata_python.db.testing`. The naming convention is byte-identical, so existing revisions and databases do not drift.
+- Environment: `STRATA_DB_LIVE=1` in the service unit (next to the old variable until every app has moved), and `STRATA_DB_DATABASE` naming the shared database. It has no built-in name any more, because that name is the owner's and this package is public; set it once where the services get their environment. `STRATA_DB_URL` and `<APP>_DATABASE_URL` work as before. Tests and CI: `STRATA_DB_TEST_ADMIN_URL`, `STRATA_DB_TEST=postgres`.
+- Commands: `strata-db revision -m "..."`, `strata-db check`, `strata-db migrate --live`, `strata-db current --live`, `strata-db new-app`, `strata-db init` (or `python -m strata_python.db`).
+- At service start (only there): `Project.load(__file__).upgrade(connect("myapp"))`.
+- Tests: the plugin is registered with every install and does nothing until the extra is there. Then `db_session`, `db_engine`, `db_url` (a URL for code that builds its own engine), `db_env` (points the app's own `connect("myapp")` at the test database; make it autouse in `conftest.py` for an app that connects by itself), `db_backend`, `db_project`. Migrations run once into a template and each test gets a copy, so a test costs a file copy. `pytest --pg` runs the same tests on a private Postgres the run starts for itself (needs the PostgreSQL server binaries), or on `STRATA_DB_TEST_ADMIN_URL`. Add the standard tests once:
+
+  ```python
+  # tests/unit/test_database.py
+  from strata_python.db.testing import test_migrations, test_schema_matches_models  # noqa: F401
+  ```
+
+  Never build a test schema with `Base.metadata.create_all()`: the tests would pass with broken migrations. And never write a guard of your own: under pytest every psycopg connection to a database that is not a throwaway `strata_db_*` one fails with `LiveDatabaseRefused`, in the test process and its subprocesses.
+- CI: run the tests with `--pg` as well for an app that deploys on Postgres, since SQLite hides Postgres-only behaviour (types, defaults, locking). The fixtures need the PostgreSQL server binaries on the runner (`sudo apt-get install -y postgresql` if they are missing; this repo's `ci.yml` shows the step), or `STRATA_DB_TEST_ADMIN_URL` pointing at a service container.
+
+Delete: the git source for the old package, its `[tool.*]` table, any home-made "unset the URL" or "block the database" fixture, and any `create_all()` in tests.
+
 ### Done when
 
 - `grep -rn "def fake_urlopen\|def no_network\|def isolated_env\|pytest_collection_modifyitems\|class FakeRun\|uvicorn.run\|/api/health" src tests` finds nothing the app still needs.
@@ -198,4 +230,4 @@ Read the `Unreleased` section and each new version in [CHANGELOG.md](CHANGELOG.m
 
 ## Develop
 
-`uv sync`, then `scripts/check` (add `--fast` to skip the tests, `--fix` for safe ruff fixes). Integration tests (`uv run pytest tests/integration`) run the gate on a tiny project and `serve` in a separate process. Read [AGENTS.md](AGENTS.md) before changing anything; every change gets a [CHANGELOG.md](CHANGELOG.md) line for the apps and a [DEVLOG.md](DEVLOG.md) entry for us. Merging to main releases: `release.yml` bumps the version through its own PR, tags it and creates the GitHub release, and `pypi-publish.yml` uploads it to PyPI.
+`uv sync`, then `scripts/check` (add `--fast` to skip the tests, `--fix` for safe ruff fixes). Integration tests (`uv run pytest tests/integration`) run the gate on a tiny project, `serve` in a separate process and `strata-db` as a command. The database tests use a throwaway Postgres: the private server needs the PostgreSQL server binaries on the machine (initdb refuses to run as root), or point `STRATA_DB_TEST_ADMIN_URL` at a throwaway server. Read [AGENTS.md](AGENTS.md) before changing anything; every change gets a [CHANGELOG.md](CHANGELOG.md) line for the apps and a [DEVLOG.md](DEVLOG.md) entry for us. Merging to main releases: `release.yml` bumps the version through its own PR, tags it and creates the GitHub release, and `pypi-publish.yml` uploads it to PyPI.

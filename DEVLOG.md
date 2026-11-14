@@ -4,6 +4,23 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**The shared database code moves in as `strata_python.db` (branch `claude/project-thread-t4kvbv`)**
+
+The owner asked whether the Python client in the database repo should move here, since the apps pull it from that repo by git commit, and agreed it was worth doing for the SQLite test databases as well. The inventory found eight apps on it at five different commits (four of them from before scratch databases moved off the live cluster), the names carrying a machine's name throughout (package, environment variables, database prefixes, the advisory-lock key, the pyproject table), untyped code, f-string SQL, and a test server that only ran on POSIX. The owner chose `STRATA_DB_*` and `[tool.strata-db]` as the new names.
+
+- `src/strata_python/db/` **new**: `config`, `guard`, `engine`, `models`, `project`, `migrations`, `scratch`, `testserver`, `testing`, `cli`, `pytest_plugin`, `_alembic/env.py` and the revision template, ported and typed (pyright strict, ty). Behaviour is the same except for what follows.
+- Names: `STRATA_DB_*` variables, `[tool.strata-db]`, `strata_db_*` throwaway databases, `strata-db-pg-*` server folders, the `strata_db` lock namespace, the `strata-db` command. **Correction to the plan posted to the owner:** it said the old names would keep working here. They cannot: they contain the machine's name, which rule 4 keeps out of this public repo. Apps rename when they move instead (README step 8), and the old package stays where it is for apps that have not moved.
+- The shared database has no default name (it was the machine's name). `STRATA_DB_DATABASE` names it, `DatabaseNotConfigured` says what to set, and `new-app` takes `--database` or the variable. `refuse_real_server` checks only when a name is set; the guard keeps tests on throwaway names either way.
+- Identifiers in DDL (schemas, roles, databases) go through the dialect's `quote_identifier`, not hand-written quotes.
+- `testserver`: binaries also from `PGBIN` and the Windows install folder; on Windows the server listens on loopback on a free port (no Unix socket); the watchdog is a Python process using `oslib.pid_alive` instead of `sh` and `kill -0`, so it works on both.
+- `pytest_plugin`: a second entry point (`strata_python_db`). It is registered with every install and imports SQLAlchemy only inside fixtures; the guard is switched on only when SQLAlchemy and Alembic are installed. `strata_python/db/__init__.py` loads its names on first use, so importing the guard needs nothing else.
+- `make_base()` is typed as returning a dataclass declarative base (a `TYPE_CHECKING`-only class), so an app's `Note(text=...)` is checked against its annotations.
+- Left for later: strata-models' store helpers (`connect(migrate=...)`, `StaleDatabase`, `revisions`, `fast_commits`), which come with the strata-models client; the database repo's `app-db.yml` and docs, which belong to that repo.
+- `tests/unit/test_db.py` **new** (the old suite, in-process with `run_cli`, plus the guard outside tests, async and psycopg2 connections, the fixtures on SQLite in this run and on Postgres through `pytester` three ways), `tests/integration/test_db_cli.py` **new** (the flows that rewrite models between steps, as `python -m strata_python.db`). The Postgres tests no longer skip silently: CI sets `STRATA_TEST_PG=1` on Linux and Windows, where a missing server fails them; they skip on macOS, which has no server binaries, and say why.
+- `pyproject.toml`: the `db` extra (in this repo's dev group so its tests run), the `strata-db` script, the second plugin entry point (disabled in addopts like the first), `S608` allowed in tests (SQL naming generated test schemas), `__main__.py` omitted from coverage. `tests/conftest.py` loads both plugins.
+- `.github/workflows/ci.yml`: PostgreSQL server binaries on Linux, `STRATA_TEST_PG`.
+- `README.md` (step 8 and the module table), `CHANGELOG.md`, `AGENTS.md` (layout, plugins).
+
 **A shared testing module and an app-facing changelog (branch `claude/project-thread-t4kvbv`)**
 
 The owner asked for a test module so every app uses the same testing code, and for a changelog apps can read to see what each release adds. The survey found `tests/utils/fakes.py` in seven apps in five versions whose behaviour is the same (only docstrings, formatting and one app's torch mocks differ), the same three fixtures in every root conftest, the same integration auto-marker, and `cli`/`cli_subprocess` fixtures that differ only in a docstring.

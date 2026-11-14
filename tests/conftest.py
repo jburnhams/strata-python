@@ -1,10 +1,10 @@
-"""Load the library's own pytest plugin (see addopts in pyproject.toml for why it is not loaded through its entry point here)."""
+"""Load the library's own pytest plugins (see addopts in pyproject.toml for why they are not loaded through their entry points here)."""
 
 import textwrap
 
 import pytest
 
-pytest_plugins = ["strata_python.pytest_plugin"]
+pytest_plugins = ["strata_python.pytest_plugin", "strata_python.db.pytest_plugin"]
 
 PYPROJECT = textwrap.dedent(
     """
