@@ -86,6 +86,14 @@ def test_exclude_from_pyproject_and_the_command_line(tmp_path, monkeypatch, caps
     assert public_check.main([".", "--exclude", "*.md"]) == 0
 
 
+def test_an_excluded_file_is_still_checked_against_owner_patterns(tmp_path):
+    """Review finding: an exclude silences the built-in patterns only, never STRATA_PUBLIC_DENY."""
+    (tmp_path / "package-lock.json").write_text(f'"version": "10.0.0", "resolved": "{EMAIL}", "host": "kitchen-box"\n')
+    found = public_check.scan([tmp_path], public_check.deny_patterns("kitchen"), ["package-lock.json"])
+    assert [f.kind for f in found] == [f"matches {public_check.DENY_ENV} pattern"]
+    assert public_check.scan([tmp_path], [], ["package-lock.json"]) == []
+
+
 def test_exclude_matches_inside_an_sdist():
     assert public_check.excluded("pkg-1.0.tar.gz/pkg-1.0/web/package-lock.json", ["web/package-lock.json"])
     assert not public_check.excluded("web/package-lock.json.bak", ["web/package-lock.json"])

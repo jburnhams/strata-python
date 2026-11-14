@@ -10,7 +10,7 @@ False positives left after that are silenced in the repo, where a reviewer sees 
 
 - `[tool.strata-public-check] exclude = ["web/package-lock.json"]` in pyproject.toml (or `--exclude`): glob patterns
   matched against each file's path in the folder or archive, or any trailing part of it (so an sdist's
-  `pkg-1.0/web/package-lock.json` matches too).
+  `pkg-1.0/web/package-lock.json` matches too). An excluded file skips the built-in patterns only.
 - `strata-public-check: ignore` anywhere on a line skips the built-in patterns on that line. Never the owner's
   `STRATA_PUBLIC_DENY` patterns: a name the owner listed is never one to publish.
 """
@@ -79,10 +79,13 @@ def deny_patterns(env: str | None = None) -> list[re.Pattern[str]]:
     return [re.compile(line.strip(), re.IGNORECASE) for line in raw.splitlines() if line.strip()]
 
 
-def scan_text(where: str, text: str, extra: Iterable[re.Pattern[str]] = ()) -> Iterator[Finding]:
+def scan_text(
+    where: str, text: str, extra: Iterable[re.Pattern[str]] = (), *, built_in: bool = True
+) -> Iterator[Finding]:
+    """Findings in one file's text. `built_in=False` (an excluded file) checks only the owner's patterns."""
     extra = list(extra)
     for number, line in enumerate(text.splitlines(), 1):
-        for kind, pattern in BUILT_IN.items() if IGNORE not in line else ():
+        for kind, pattern in BUILT_IN.items() if built_in and IGNORE not in line else ():
             for match in pattern.finditer(line):
                 if kind == "home folder path" and match.group("user").lower() in PLACEHOLDER_USERS:
                     continue
@@ -140,10 +143,13 @@ def scan(paths: Iterable[Path], extra: Iterable[re.Pattern[str]] = (), exclude: 
     findings: list[Finding] = []
     for path in paths:
         for where, data in _members(path):
-            if excluded(where, exclude):
+            skip = excluded(where, exclude)
+            if skip and not extra:
                 continue
             text = io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="replace").read()
-            findings.extend(scan_text(where, text, extra))
+            # an excluded file is still checked against the owner's patterns: an exclude is for false positives of the
+            # built-in ones, and a name the owner listed is never one to publish (review finding)
+            findings.extend(scan_text(where, text, extra, built_in=not skip))
     return findings
 
 
