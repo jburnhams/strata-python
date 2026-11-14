@@ -20,7 +20,7 @@ for tests); and the retry rules of `tasks.retry`.
             report_progress(i, len(lines), f"line {i}")
         return {"lines": len(lines)}
 
-    WORKER = Worker(QUEUE, {"ocr": ocr}, concurrency=2).start()   # stop() at shutdown
+    WORKER = Worker(QUEUE, {"ocr": ocr}, concurrency=2).start()   # a process per job; stop() at shutdown
     QUEUE.page(state="running")                                   # Page[Task] for the API
     QUEUE.cancel(jid)
 
@@ -37,9 +37,10 @@ What a job gets:
 - **Resources**: a job is not claimed while a running job holds one of its `resources` (the GPU, a book's folder).
   Claims are serialised (a lock in this process, a transaction-scoped advisory lock on Postgres, the write lock on
   SQLite), so two workers, in this process or another, never start two jobs that share a resource.
-- **Cancel and timeout**: cooperative. `cancel` ends a queued job at once and asks a running one to stop; a job past
-  its `timeout_s` is asked too, and fails with TimeoutError (so it retries) when its handler returns. A handler that
-  never checks `job.stopping` runs to the end; work that must be killable runs as a `Detached` process.
+- **Cancel and timeout**: `cancel` ends a queued job at once and stops a running one; a job past its `timeout_s` is
+  stopped and fails with TimeoutError (so it retries). A `Worker` runs each job in its own process group by default
+  (`tasks.child`), so stopping kills the job and the tools it started; with `isolate=False` (and in `run`/`step`) it
+  is cooperative: the handler sees `job.stopping` and returns, and one that never checks runs to the end.
 - **on_fail**: `Queue(on_fail=...)` is called with the connection, the job and the error inside the transaction that
   fails it for good, for the app's cascade (listory marks the book's other jobs).
 
@@ -82,6 +83,7 @@ from sqlalchemy.engine import Connection, Engine, Row
 
 from strata_python import oslib
 from strata_python.contracts import FINISHED, Page, Progress, Task, utc
+from strata_python.tasks import child
 from strata_python.tasks.progress import ProgressReporter, reporting
 from strata_python.tasks.retry import Decision, next_state
 
@@ -555,7 +557,14 @@ class Queue:
 
 class Worker:
     """Threads that claim and run jobs until stopped. Each running job gets a heartbeat every `heartbeat_s`, which also
-    picks up a cancel request and asks a job past its timeout to stop."""
+    picks up a cancel request and asks a job past its timeout to stop.
+
+    `isolate=True` (the default) runs jobs in job processes of their own (`tasks.child`), one per thread and kept
+    between jobs, so a quick job costs milliseconds: a cancel, a timeout or `stop` kills the process and every tool it
+    started at once (the next job gets a fresh one), a crash or a leak dies with it, and it dies with the server.
+    `max_jobs` replaces a process after that many jobs. The handlers must be module-level functions (the process
+    imports them by name); `isolate=False` runs them on this process's threads and asks them to stop through
+    `job.stopping`. `lower_priority=True` runs the job processes at idle CPU and disk priority."""
 
     def __init__(
         self,
@@ -566,9 +575,18 @@ class Worker:
         poll_s: float = 1.0,
         heartbeat_s: float = 10.0,
         stale_s: float = 300.0,
+        isolate: bool = True,
+        lower_priority: bool = False,
+        max_jobs: int | None = None,
     ) -> None:
         self.queue = queue
         self.handlers = dict(handlers)
+        self.isolate = isolate
+        self.lower_priority = lower_priority
+        self.max_jobs = max_jobs
+        self.slots: list[child.JobProcess] = []  # one job process per thread, kept between jobs
+        # Checked now, so a handler a child could not import fails at start-up, not in the first job.
+        self._specs = {k: child.handler_spec(fn) for k, fn in self.handlers.items()} if isolate else {}
         self.concurrency = concurrency
         self.poll_s = poll_s
         self.heartbeat_s = heartbeat_s
@@ -602,6 +620,19 @@ class Worker:
             th.join(max(deadline - time.monotonic(), 0))
 
     def _loop(self) -> None:
+        slot = None
+        if self.isolate:
+            slot = child.JobProcess(self._process_spec(), max_jobs=self.max_jobs)
+            with self._lock:
+                self.slots.append(slot)
+            slot.ensure()  # started now, so the first job does not wait for imports
+        try:
+            self._claim_and_run(slot)
+        finally:
+            if slot is not None:
+                slot.close()
+
+    def _claim_and_run(self, slot: child.JobProcess | None) -> None:
         while not self._stop.is_set():
             job = self.queue.claim(list(self.handlers))
             if job is None:
@@ -610,7 +641,10 @@ class Worker:
             with self._lock:
                 self._running[job.id] = job
             try:
-                self.queue.run(job, self.handlers[job.kind])
+                if slot is not None:
+                    self._run_isolated(job, slot)
+                else:
+                    self.queue.run(job, self.handlers[job.kind])
             finally:
                 with self._lock:
                     self._running.pop(job.id, None)
@@ -629,3 +663,46 @@ class Worker:
                     and self.queue.clock() - job.started_at > job.timeout_s
                 ):
                     job.stop_event.set()
+
+    def _process_spec(self) -> Json:
+        q = self.queue
+        return {
+            "url": q.engine.url.render_as_string(hide_password=False),
+            "table": q.t.name,
+            "schema": q.t.schema,
+            "lower_priority": self.lower_priority,
+        }
+
+    def _run_isolated(self, job: Job, slot: child.JobProcess) -> None:
+        """Run a claimed job in this slot's job process and record what happened (see `tasks.child`)."""
+        q = self.queue
+        before = job.progress.done if job.progress is not None else 0.0
+        started = time.monotonic()
+
+        def should_stop() -> str:
+            if job.cancel_requested:
+                return "cancel"
+            if job.timeout_s is not None and time.monotonic() - started > job.timeout_s:
+                return "timeout"
+            return "stop" if job.stop_event.is_set() else ""
+
+        cmd = {"id": job.id, "token": job.token, "handler": self._specs[job.kind]}
+        outcome, ended = slot.run(cmd, should_stop)
+        if outcome is not None and outcome.get("gone"):
+            return  # this attempt was recovered before the process got to it: nothing of it to record
+        fresh = q.get(job.id)  # the process wrote progress to the row: read it back for `progressed`
+        if fresh is not None and fresh.token == job.token:
+            job.progress = fresh.progress
+        progressed = (job.progress.done if job.progress is not None else 0.0) > before
+        if ended == "cancel":
+            q.finish(job, None)  # recorded as cancelled, since it was asked to stop
+        elif ended == "timeout":
+            q.fail(job, TimeoutError(f"took longer than {job.timeout_s:g} s"), progressed=progressed)
+        elif ended == "stop":
+            q.release(job)  # the worker is shutting down: the job runs again, from the start, next time
+        elif outcome is None:
+            q.fail(job, WorkerLost("its job process exited before it finished"), progressed=progressed)
+        elif outcome.get("ok"):
+            q.finish(job, outcome.get("result"))
+        else:
+            q.fail(job, child.rebuild_error(outcome), progressed=progressed)

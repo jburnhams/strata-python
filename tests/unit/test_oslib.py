@@ -144,3 +144,38 @@ def test_load_average():
         return
     assert load is not None
     assert len(load) == 3
+
+
+LIFELINE_CHILD = """
+import os, subprocess, sys, time
+from strata_python import oslib
+assert oslib.watch_supervisor()
+assert oslib.SUPERVISED_ENV not in os.environ  # its own children are not supervised by it
+tool = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+open(sys.argv[1], "w").write(f"{os.getpid()} {tool.pid}")
+time.sleep(120)
+"""
+
+
+def test_a_supervised_child_ends_its_group_when_the_parent_end_of_the_lifeline_closes(tmp_path):
+    """A server that crashes closes the pipe the same way: the job and the tool it started must not outlive it."""
+    pids = tmp_path / "pids"
+    p = oslib.start_supervised([sys.executable, "-c", LIFELINE_CHILD, str(pids)])
+    deadline = time.monotonic() + 30
+    while not (pids.exists() and len(pids.read_text().split()) == 2):
+        assert time.monotonic() < deadline
+        assert p.poll() is None
+        time.sleep(0.02)
+    child, tool = (int(x) for x in pids.read_text().split())
+    assert oslib.pid_alive(tool)
+    assert p.stdin is not None
+    p.stdin.close()
+    assert p.wait(30) != 0
+    while oslib.pid_alive(tool) or oslib.pid_alive(child):
+        assert time.monotonic() < deadline, (child, tool)
+        time.sleep(0.02)
+
+
+def test_watch_supervisor_needs_a_supervisor(monkeypatch):
+    monkeypatch.delenv(oslib.SUPERVISED_ENV, raising=False)
+    assert not oslib.watch_supervisor()

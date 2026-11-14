@@ -4,7 +4,7 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 
 | Module | What it gives an app |
 |---|---|
-| `strata_python.oslib` | Cross-platform file locks, process liveness (`pid_alive`), `kill_tree`, `lower_priority`, `detached_kwargs`, `load_average`, `venv_python`, `cli_command(module)` |
+| `strata_python.oslib` | Cross-platform file locks, process liveness (`pid_alive`), `kill_tree`, `lower_priority`, `detached_kwargs`, `load_average`, `start_supervised`/`watch_supervisor`/`kill_group` (a child in its own process group that dies with its parent), `venv_python`, `cli_command(module)` |
 | `strata_python.settings` | `Settings` / `Setting` / `ListSetting`: one JSON file in `~/.<app>` with `<APP>_*` environment overrides, validation (`absolute_path`, `non_empty`, `number_between`, `whole_between`, `iso_date`, `boolean`), typed getters, atomic saves, and `bind(store)` to keep them elsewhere (`strata_python.db.settings.TableStore`) |
 | `strata_python.web` | `base_app` (health with the app's own fields and `commit` + typed settings routes), `add_error_handlers` (exceptions to `ErrorBody` responses), `add_system` (`GET /api/system`: folders, disks, services), `source_commit`, `add_web` (built web app or stand-in page at every non-API path), `with_base` (reverse-proxy-safe `<base href>`), `static_file` (path-safe), `serve` |
 | `strata_python.cli` | `add_doctor` (imports, labels, optional modules and the app's own `Check`s), `add_set`, `add_serve` for the app's argparse subcommands |
@@ -186,7 +186,7 @@ The shortcuts still return the service's JSON, so existing code keeps working, a
 
 ### 6. OS helpers
 
-Delete the app's `oslib.py` and import from `strata_python.oslib`: `file_lock(f)`, `pid_alive(pid)`, `kill_tree(pid, sig)`, `lower_priority(nice, io=False)` (`io=True` for idle disk priority too; drop the app's `ionice` helper), `venv_python(venv)` and `cli_command(module)`. `cli_command` now takes the module name (`cli_command("myapp")`). Local `alive(pid)`, `_alive` and `lower_priority()` copies go too. `detached_kwargs()` starts a process outside the server's session and `load_average()` replaces 360's copy. Helpers this library does not have yet (listory's process-group supervisor) stay in the app until they move here, and the app's file says so.
+Delete the app's `oslib.py` and import from `strata_python.oslib`: `file_lock(f)`, `pid_alive(pid)`, `kill_tree(pid, sig)`, `lower_priority(nice, io=False)` (`io=True` for idle disk priority too; drop the app's `ionice` helper), `venv_python(venv)` and `cli_command(module)`. `cli_command` now takes the module name (`cli_command("myapp")`). Local `alive(pid)`, `_alive` and `lower_priority()` copies go too. `detached_kwargs()` starts a process outside the server's session and `load_average()` replaces 360's copy. listory's `job_process`, `start_job`, `watch_supervisor`, `terminate_job_group` and `kill_job` are `start_supervised(cmd, env=)`, `watch_supervisor()`, `terminate_own_group()` and `kill_group(proc)`; with the queue's `Worker` an app needs none of them directly.
 
 ### 6b. Background work
 
@@ -203,12 +203,12 @@ from strata_python.tasks.queue import Job, Queue, Worker
 
 QUEUE = Queue(engine, JOBS, on_fail=cascade)                   # on_fail(conn, job, error), in the failing transaction
 QUEUE.enqueue("ocr", {"page": 3}, domain="book:12", dedupe=True, resources=["gpu"], timeout_s=600)
-WORKER = Worker(QUEUE, {"ocr": ocr_page}, concurrency=2).start()   # recovers jobs a dead worker left running
+WORKER = Worker(QUEUE, {"ocr": ocr_page}, concurrency=2).start()   # a job process per thread, reused; recovers dead workers' jobs
 QUEUE.page(state="running", after=cursor)                      # Page[Task] for GET /api/jobs
 QUEUE.cancel(job_id); QUEUE.retry(job_id); QUEUE.prune(older_than_s=30 * 86400)
 ```
 
-  A handler is `fn(job) -> result`; it reads `job.options`, reports progress, and returns early when `job.stopping` (cancelled, past its timeout, or the worker stopping). In tests, `QUEUE.step(handlers)` claims and runs one job in the test's own thread.
+  A handler is a module-level `fn(job) -> result` that reads `job.options` and reports progress. By default jobs run in job processes (`python -m strata_python.tasks.child`, one per worker thread, kept between jobs and importing the handlers by name), so a cancel, a timeout or `WORKER.stop()` kills the job and every tool it started, and jobs die with the server; a quick job costs about half a millisecond more than on a thread (3.5 ms against 2.9 ms a job on SQLite), since only a kill starts a new process. `max_jobs=N` replaces a process after N jobs, for code that leaks. The worker checks at start-up that every handler can be imported. `Worker(lower_priority=True)` runs the jobs at idle CPU and disk priority. `Worker(isolate=False)` runs handlers on the server's threads instead, where they return early when `job.stopping`. In tests, `QUEUE.step(handlers)` claims and runs one job in the test's own thread.
 
 ### 7. Tests
 

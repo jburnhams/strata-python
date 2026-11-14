@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
+import io
+import json
 import os
 import threading
 import time
 from collections.abc import Iterator
 
+import job_handlers
 import pytest
 from sqlalchemy import MetaData
 
 import strata_python.db as db
+from strata_python import oslib
 from strata_python.contracts import Progress
 from strata_python.db import guard, testserver
 from strata_python.db.scratch import scratch_database
 from strata_python.db.testing import scratch_engine
-from strata_python.tasks import RetryLater, report_progress
+from strata_python.tasks import RetryLater, child, report_progress
 from strata_python.tasks.queue import Job, JobCancelled, Queue, Worker, WorkerLost, dedupe_key, jobs_table
 
 # As in test_db.py: CI sets STRATA_TEST_PG=1, so a missing Postgres fails there instead of skipping.
@@ -292,7 +296,9 @@ def test_worker_threads_run_jobs_and_time_out_and_stop(setup):
     for n in range(6):
         q.enqueue("quick", {"n": n})
     late = q.enqueue("forever", timeout_s=0.2)
-    w = Worker(q, {"quick": quick, "forever": forever}, concurrency=2, poll_s=0.02, heartbeat_s=0.05).start()
+    w = Worker(
+        q, {"quick": quick, "forever": forever}, concurrency=2, poll_s=0.02, heartbeat_s=0.05, isolate=False
+    ).start()
     deadline = time.monotonic() + 20
     while q.get(late).attempts == 0 or len(done) < 6:
         assert time.monotonic() < deadline, q.counts()
@@ -307,3 +313,188 @@ def test_worker_threads_run_jobs_and_time_out_and_stop(setup):
     assert q.get(shutdown).state == "queued"  # released, not failed: it runs again next start
     assert q.get(shutdown).attempts == 0
     assert w.ran >= 7
+
+
+# --- jobs in their own process (Worker(isolate=True), tasks.child) ---------------------------------------------------
+
+
+def wait_for(cond, what, timeout=30.0):
+    deadline = time.monotonic() + timeout
+    while not cond():
+        assert time.monotonic() < deadline, what()
+        time.sleep(0.02)
+
+
+def test_isolated_jobs_run_in_their_own_process_and_fail_as_they_would_in_this_one(setup):
+    q, _, _ = setup
+    q.clock = time.time
+    ids = {k: q.enqueue(k, {"n": 4} if k == "count" else {}) for k in HANDLERS}
+    w = Worker(q, HANDLERS, concurrency=3, poll_s=0.02, heartbeat_s=0.05).start()
+    try:
+        wait_for(
+            lambda: all(
+                q.get(i).state != "running" and q.get(i).attempts + (q.get(i).state == "done") > 0 for i in ids.values()
+            ),
+            q.counts,
+        )
+    finally:
+        w.stop(timeout=20)
+    got = {k: q.get(i) for k, i in ids.items()}
+    assert got["count"].state == "done"
+    assert got["count"].result["n"] == 4
+    assert got["count"].result["pid"] != os.getpid()  # it ran in a process of its own
+    assert (got["count"].progress.done, got["count"].progress.text) == (4, "4 of 4")
+    assert (got["outside"].state, got["outside"].error) == (
+        "queued",
+        "FileNotFoundError: [Errno 2] No such file",
+    )  # retried
+    assert got["outside"].progress.text == "half"
+    assert (got["bug"].state, got["bug"].error) == ("failed", "TypeError: a bug")  # a bug fails at once, as here
+    assert (got["missing"].state, got["missing"].error) == ("queued", "KeyError: 'book'")  # reads as it would here
+    assert got["unbuildable"].error == "Unbuildable: needs two"
+    later = got["later"]
+    assert (later.state, later.error) == ("queued", "RetryLater: file still being written")
+    assert later.run_after - time.time() == pytest.approx(5, abs=3)  # its own pause, not the backoff
+    assert (got["crash"].state, got["crash"].error) == (
+        "queued",
+        "WorkerLost: its job process exited before it finished",
+    )
+
+
+HANDLERS = {
+    "count": job_handlers.count,
+    "outside": job_handlers.outside,
+    "bug": job_handlers.bug,
+    "missing": job_handlers.missing,
+    "unbuildable": job_handlers.unbuildable,
+    "later": job_handlers.later,
+    "crash": job_handlers.crash,
+}
+
+
+def _pids(path):
+    wait_for(lambda: path.exists() and len(path.read_text().split()) == 2, lambda: "no pids yet")
+    return [int(p) for p in path.read_text().split()]
+
+
+@pytest.mark.parametrize("how", ["cancel", "timeout", "stop"])
+def test_cancel_timeout_and_stop_kill_an_isolated_job_and_its_tools(setup, tmp_path, how):
+    """A thread can only be asked; a job process and the tool it started are killed, at once."""
+    q, _, _ = setup
+    q.clock = time.time
+    pids = tmp_path / "pids"
+    jid = q.enqueue("spawn", {"pids": str(pids)}, timeout_s=1.5 if how == "timeout" else None)
+    w = Worker(q, {"spawn": job_handlers.spawn_and_wait}, poll_s=0.02, heartbeat_s=0.05).start()
+    try:
+        worker, tool = _pids(pids)
+        assert oslib.pid_alive(worker)
+        assert oslib.pid_alive(tool)
+        if how == "cancel":
+            q.cancel(jid)
+        if how == "stop":
+            w.stop(timeout=20)
+        wait_for(lambda: q.get(jid).state != "running", q.counts)
+    finally:
+        w.stop(timeout=20)
+    wait_for(lambda: not oslib.pid_alive(worker) and not oslib.pid_alive(tool), lambda: (worker, tool))
+    job = q.get(jid)
+    if how == "cancel":
+        assert job.state == "cancelled"
+    elif how == "timeout":
+        assert (job.state, job.error) == ("queued", "TimeoutError: took longer than 1.5 s")
+    else:
+        assert (job.state, job.attempts) == ("queued", 0)  # released: it runs again at the next start
+
+
+def test_isolated_workers_refuse_handlers_a_process_cannot_import(setup):
+    q, _, _ = setup
+
+    def local(job: Job) -> None: ...
+
+    for fn in (local, lambda job: None):
+        with pytest.raises(ValueError, match="cannot be imported by name"):
+            Worker(q, {"x": fn})
+    Worker(q, {"x": local}, isolate=False)  # in this process it is fine
+
+
+def test_child_main_runs_the_named_attempts_and_skips_a_replaced_one(setup, monkeypatch):
+    """The job process's loop, in this process so its lines are measured; the tests above run it for real."""
+    q, _, _ = setup
+    a = q.enqueue("count", {"n": 2})
+    b = q.enqueue("bug")
+    ja, jb = q.claim(), q.claim()
+    spec = {"url": q.engine.url.render_as_string(hide_password=False), "table": q.t.name, "schema": None}
+    monkeypatch.setenv(child.ENV, json.dumps(spec))
+    cmds = [
+        {"id": a, "token": ja.token, "handler": child.handler_spec(job_handlers.count)},
+        {"id": a, "token": "another-attempt", "handler": child.handler_spec(job_handlers.count)},
+        {"id": b, "token": jb.token, "handler": child.handler_spec(job_handlers.bug)},
+    ]
+    eof = threading.Event()
+    replies = io.StringIO()
+    assert child.main(io.StringIO("".join(json.dumps(c) + "\n" for c in cmds)), replies, eof.set) == 0
+    assert eof.wait(5)
+    assert [json.loads(line) for line in replies.getvalue().splitlines()] == [
+        {"ok": True, "result": {"n": 2, "pid": os.getpid()}},
+        {"gone": True},
+        {"ok": False, "type": "TypeError", "base": "TypeError", "message": "a bug"},
+    ]
+    assert q.get(a).progress.done == 2
+
+
+def test_job_processes_are_reused_and_replaced_only_when_killed(setup, tmp_path):
+    """Jonathan: quick jobs cannot pay for a new interpreter each. One process per thread runs job after job; a cancel
+    costs a new one; `max_jobs` replaces one on purpose. What handlers print stays out of the answers."""
+    q, _, _ = setup
+    q.clock = time.time
+    handlers = {"pid": job_handlers.pid, "chatty": job_handlers.chatty, "spawn": job_handlers.spawn_and_wait}
+    w = Worker(q, handlers, poll_s=0.01, heartbeat_s=0.05).start()
+    try:
+        wait_for(lambda: len(w.slots) == 1 and w.slots[0].proc is not None, lambda: w.slots)
+        slot = w.slots[0]
+        n = 40
+        started = time.monotonic()
+        ids = [q.enqueue("pid") for _ in range(n)]
+        wait_for(lambda: q.get(ids[-1]).state == "done", q.counts)
+        per_job = (time.monotonic() - started) / n
+        pids = {q.get(i).result for i in ids}
+        assert len(pids) == 1  # one process ran them all
+        assert pids != {os.getpid()}
+        assert per_job < 0.25, per_job  # a pipe round trip and a few row writes, not an interpreter start
+        chat = q.enqueue("chatty")
+        wait_for(lambda: q.get(chat).state == "done", q.counts)
+        assert q.get(chat).result in pids  # printing did not break the protocol or the process
+        long = q.enqueue("spawn", {"pids": str(tmp_path / "pids")})
+        _pids(tmp_path / "pids")
+        q.cancel(long)
+        wait_for(lambda: q.get(long).state == "cancelled", q.counts)
+        after = q.enqueue("pid")
+        wait_for(lambda: q.get(after).state == "done", q.counts)
+        assert q.get(after).result not in pids  # the killed process was replaced
+        assert slot.started == 2
+    finally:
+        w.stop(timeout=20)
+    assert slot.proc is None  # stopped with the worker
+
+
+def test_max_jobs_replaces_a_process_after_that_many(setup):
+    q, _, _ = setup
+    q.clock = time.time
+    w = Worker(q, {"pid": job_handlers.pid}, poll_s=0.01, heartbeat_s=0.05, max_jobs=2).start()
+    try:
+        ids = [q.enqueue("pid") for _ in range(5)]
+        wait_for(lambda: q.get(ids[-1]).state == "done", q.counts)
+    finally:
+        w.stop(timeout=20)
+    got = [q.get(i).result for i in ids]
+    assert got[0] == got[1] != got[2] == got[3] != got[4]
+
+
+def test_rebuilt_errors_keep_their_class_and_name():
+    e = child.rebuild_error(child.error_outcome(job_handlers.Unbuildable("a", "b")))
+    assert (type(e).__name__, str(e), isinstance(e, Exception)) == ("Unbuildable", "a b", True)
+    e = child.rebuild_error(child.error_outcome(UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad")))
+    assert (type(e).__name__, isinstance(e, RuntimeError)) == ("UnicodeDecodeError", True)  # needs five arguments
+    assert type(child.rebuild_error({"type": "X", "base": "print", "message": "m"})).__mro__[1] is RuntimeError
+    with pytest.raises(ValueError, match="not a module:function"):
+        child.resolve("nothing")
