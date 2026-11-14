@@ -30,11 +30,13 @@ What a job gets:
   `done` grew) counts as the first failure again. `RetryLater(after_s=...)` names its own pause.
 - **Crash recovery**: a running job whose worker died (its pid is gone on this host, or no heartbeat for
   `stale_s`) is failed with `WorkerLost` by `recover()` (which `Worker.start` runs) and so retried like any failure.
+  Each claim gets its own token and every write an attempt makes names it, so a worker that was only slow, and whose
+  job has since been claimed again, finds its writes ignored and its heartbeat telling it to stop.
 - **Dedupe**: `dedupe=True` returns the id of a queued or running job with the same kind, domain and options instead
   of adding another (best effort: two enqueues in the same instant from two processes can both add one).
 - **Resources**: a job is not claimed while a running job holds one of its `resources` (the GPU, a book's folder).
-  Claims are serialised (a lock in this process, and a transaction-scoped advisory lock on Postgres), so two workers
-  never start two jobs that share a resource.
+  Claims are serialised (a lock in this process, a transaction-scoped advisory lock on Postgres, the write lock on
+  SQLite), so two workers, in this process or another, never start two jobs that share a resource.
 - **Cancel and timeout**: cooperative. `cancel` ends a queued job at once and asks a running one to stop; a job past
   its `timeout_s` is asked too, and fails with TimeoutError (so it retries) when its handler returns. A handler that
   never checks `job.stopping` runs to the end; work that must be killable runs as a `Detached` process.
@@ -53,6 +55,7 @@ import os
 import socket
 import threading
 import time
+import uuid
 from collections.abc import Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -117,6 +120,9 @@ def jobs_table(metadata: MetaData, name: str = "jobs") -> Table:
         Column("heartbeat_at", Float, nullable=True),
         Column("owner", String(200), nullable=True),  # host:pid of the worker running it
         Column("owner_pid", Integer, nullable=True),
+        # A new token per claim: every update an attempt makes names it, so a worker whose job was recovered and
+        # claimed again elsewhere cannot write over the new attempt.
+        Column("claim_token", String(32), nullable=True),
         Column("cancel_requested", Boolean, nullable=False, default=False),
         Column("error", Text, nullable=True),
         Column("result", Text, nullable=True),  # JSON
@@ -152,6 +158,7 @@ class Job:
     result: Any
     progress: Progress | None
     cancel_requested: bool
+    token: str | None = None
     stop_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     @classmethod
@@ -175,6 +182,7 @@ class Job:
             result=_loads(r.result),
             progress=None if p is None else Progress.model_validate(p),
             cancel_requested=bool(r.cancel_requested),
+            token=r.claim_token,
         )
 
     @property
@@ -215,6 +223,7 @@ class Queue:
         base_s: float = 30.0,
         cap_s: float = 3600.0,
         on_fail: Callable[[Connection, Job, str], None] | None = None,
+        batch: int = 200,
     ) -> None:
         self.engine = engine
         self.t = table
@@ -225,6 +234,7 @@ class Queue:
         self.base_s = base_s
         self.cap_s = cap_s
         self.on_fail = on_fail
+        self.batch = batch
         self._claim_lock = threading.Lock()
 
     # --- adding and reading ------------------------------------------------------------------------------------------
@@ -319,52 +329,66 @@ class Queue:
             if c.dialect.name == "postgresql":
                 lock_id = int(hashlib.sha256(f"strata-queue:{self.t.fullname}".encode()).hexdigest()[:15], 16)
                 c.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": lock_id})
+            elif c.dialect.name == "sqlite":
+                # A write that changes nothing takes SQLite's write lock for the rest of the transaction, so another
+                # process (or another Queue on the same file) waits here, before it reads which resources are held.
+                c.execute(update(self.t).where(text("0")).values(state=self.t.c.state))
             yield c
 
     def claim(self, kinds: Sequence[str] | None = None) -> Job | None:
         """Take the next job this worker may run (highest priority, then oldest; not before its `run_after`; none of
-        its resources held by a running job) and mark it running. None when there is nothing to do."""
+        its resources held by a running job) and mark it running. None when there is nothing to do. Candidates are read
+        `batch` at a time, in claim order, so jobs waiting on a held resource never hide the ones behind them."""
         t = self.t
         now = self.clock()
         with self._serialised() as c:
             held: set[str] = set()
             for (raw,) in c.execute(select(t.c.resources).where(t.c.state == "running")).all():
                 held.update(cast("list[str]", json.loads(raw)))
-            q = (
+            base = (
                 select(t)
                 .where(t.c.state == "queued", or_(t.c.run_after.is_(None), t.c.run_after <= now))
                 .order_by(t.c.priority.desc(), t.c.id)
-                .limit(200)
+                .limit(self.batch)
             )
             if kinds is not None:
-                q = q.where(t.c.kind.in_(list(kinds)))
-            for r in c.execute(q).all():
-                if held & set(cast("list[str]", json.loads(r.resources))):
-                    continue
-                done = c.execute(
-                    update(t)
-                    .where(t.c.id == r.id, t.c.state == "queued")
-                    .values(
-                        state="running",
-                        started_at=now,
-                        heartbeat_at=now,
-                        owner=self.owner,
-                        owner_pid=os.getpid(),
-                        cancel_requested=False,
+                base = base.where(t.c.kind.in_(list(kinds)))
+            q = base
+            while rows := c.execute(q).all():
+                for r in rows:
+                    if held & set(cast("list[str]", json.loads(r.resources))):
+                        continue
+                    token = uuid.uuid4().hex
+                    done = c.execute(
+                        update(t)
+                        .where(t.c.id == r.id, t.c.state == "queued")
+                        .values(
+                            state="running",
+                            started_at=now,
+                            heartbeat_at=now,
+                            owner=self.owner,
+                            owner_pid=os.getpid(),
+                            cancel_requested=False,
+                            claim_token=token,
+                        )
                     )
-                )
-                if done.rowcount == 1:
-                    row = c.execute(select(t).where(t.c.id == r.id)).one()
-                    return Job.from_row(row)
+                    if done.rowcount == 1:
+                        return Job.from_row(c.execute(select(t).where(t.c.id == r.id)).one())
+                last = rows[-1]  # the next batch starts after the last one read (priority desc, then id)
+                q = base.where(or_(t.c.priority < last.priority, and_(t.c.priority == last.priority, t.c.id > last.id)))
         return None
+
+    def _mine(self, job: Job) -> Any:
+        """The row of this attempt of `job`: still running, under the claim this worker made."""
+        return and_(self.t.c.id == job.id, self.t.c.state == "running", self.t.c.claim_token == job.token)
 
     def heartbeat(self, job: Job) -> bool:
         """Mark the job alive and pick up a cancel request; False when it should stop."""
         t = self.t
         with self.engine.begin() as c:
-            c.execute(update(t).where(t.c.id == job.id, t.c.state == "running").values(heartbeat_at=self.clock()))
-            r = c.execute(select(t.c.cancel_requested, t.c.state).where(t.c.id == job.id)).first()
-        if r is None or r.state != "running" or r.cancel_requested:
+            c.execute(update(t).where(self._mine(job)).values(heartbeat_at=self.clock()))
+            r = c.execute(select(t.c.cancel_requested, t.c.state, t.c.claim_token).where(t.c.id == job.id)).first()
+        if r is None or r.state != "running" or r.claim_token != job.token or r.cancel_requested:
             job.cancel_requested = True
         return not job.stopping
 
@@ -373,9 +397,7 @@ class Queue:
         t = self.t
         with self.engine.begin() as c:
             c.execute(
-                update(t)
-                .where(t.c.id == job.id, t.c.state == "running")
-                .values(progress=progress.model_dump_json(), heartbeat_at=self.clock())
+                update(t).where(self._mine(job)).values(progress=progress.model_dump_json(), heartbeat_at=self.clock())
             )
         job.progress = progress
 
@@ -391,7 +413,7 @@ class Queue:
         with self.engine.begin() as c:
             c.execute(
                 update(t)
-                .where(t.c.id == job.id, t.c.state == "running")
+                .where(self._mine(job))
                 .values(state=state, finished_at=self.clock(), result=json.dumps(result, default=str), error=None)
             )
         job.state = state
@@ -426,14 +448,13 @@ class Queue:
                     "owner": None,
                     "owner_pid": None,
                     "heartbeat_at": None,
+                    "claim_token": None,
                 }
             else:
                 values = {"state": "cancelled" if job.cancel_requested else "failed", "finished_at": now}
-            c.execute(
-                update(t)
-                .where(t.c.id == job.id, t.c.state == "running")
-                .values(attempts=d.attempts, error=d.error, **values)
-            )
+            done = c.execute(update(t).where(self._mine(job)).values(attempts=d.attempts, error=d.error, **values))
+            if done.rowcount == 0:  # this attempt was recovered (and maybe claimed again): nothing of it to record
+                return d
             if d.state == "failed" and self.on_fail is not None:
                 self.on_fail(c, job, d.error)
         job.state, job.attempts, job.error = str(values["state"]), d.attempts, d.error
@@ -519,8 +540,10 @@ class Queue:
         with self.engine.begin() as c:
             c.execute(
                 update(t)
-                .where(t.c.id == job.id, t.c.state == "running")
-                .values(state="queued", owner=None, owner_pid=None, heartbeat_at=None, started_at=None)
+                .where(self._mine(job))
+                .values(
+                    state="queued", owner=None, owner_pid=None, heartbeat_at=None, started_at=None, claim_token=None
+                )
             )
         job.state = "queued"
 

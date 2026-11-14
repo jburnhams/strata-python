@@ -4,6 +4,14 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**Queue and `Detached` fixes from the review of PR #25 (branch `claude/project-thread-aefumh`)**
+
+The Codex review of PR #25 found four real races; each fix has a test that fails without it.
+
+- `src/strata_python/tasks/queue.py`: a `claim_token` column, new per claim; heartbeat, report, finish, fail and release update only the row with this attempt's token, so a worker whose job was recovered and claimed again writes nothing over the new attempt (and `on_fail` does not run for it), and its heartbeat tells it to stop. `claim` reads candidates `batch` (200) at a time and goes on past the batch, keyed on (priority, id), so jobs waiting for a held resource no longer hide the rest. On SQLite the claim starts with a write that changes nothing, which takes the database's write lock, so another process or `Queue` waits before reading which resources are held (the earlier entry's "two workers cannot start two jobs that share a resource" held only within one `Queue` on SQLite).
+- `src/strata_python/tasks/status.py`: `StatusFile.locked()` (`<path>.lock`, `oslib.file_lock`); `write` and `update` hold it, and `Detached.start` holds it from before the child exists until its "running" is written, so a child that finishes at once is no longer written over and then read as died.
+- `tests/unit/test_queue.py`: blocked jobs beyond a batch, a second `Queue` waiting on a claim in progress (both backends), a recovered attempt that cannot touch its replacement. `tests/unit/test_tasks.py`: a child that finishes at once, an update in another process waiting for the lock.
+
 **A durable job queue: `strata_python.tasks.queue` (branch `claude/project-thread-aefumh`)**
 
 The plan's last step before the later modules: one queue for the seven job systems. It follows the survey's design: listory's schema and claim loop on SQLAlchemy Core, the strata-models store's style (injectable clock, conditional-UPDATE claim, cursor paging, `recover`, `prune`, `step`), and `tasks.retry`. The first adopter the plan names is strata-scan, with listory replacing its own queue as the proof; neither has moved yet.

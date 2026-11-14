@@ -3,6 +3,7 @@
 import datetime
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -181,6 +182,37 @@ def test_detached_runs_a_real_process_that_reports_through_its_file(tmp_path):
     assert (d["output"], d["progress"], d["project"], d["pid"]) == ("out.mp4", {"done": 1}, "p", pid)
     assert "finished" in (tmp_path / "logs" / "a.log").read_text()
     assert not job.stop()  # not running
+
+
+def test_a_child_that_finishes_at_once_is_not_written_over(tmp_path):
+    """Review on PR #25: the parent wrote "running" after starting the child, so a child that was quicker could have
+    its "done" replaced and then read as died. The parent now writes under the file's lock, taken before the child
+    exists, and the child's update waits for it."""
+    script = tmp_path / "child.py"
+    script.write_text(CHILD)
+    status = StatusFile(str(tmp_path / "s.json"))
+    job = Detached([sys.executable, str(script), "quick"], status, str(tmp_path / "a.log"))
+    pid = job.start(project="p")
+    deadline = time.monotonic() + 20
+    while (job.read() or {}).get("state") == "running":
+        assert time.monotonic() < deadline
+        time.sleep(0.02)
+    d = job.read()
+    assert (d["state"], d["output"], d["pid"]) == ("done", "out.mp4", pid)
+
+
+def test_status_file_updates_wait_for_its_lock_across_processes(tmp_path):
+    status = StatusFile(str(tmp_path / "s.json"))
+    status.write("running", n=1)
+    code = "import sys; from strata_python.tasks import StatusFile\nStatusFile(sys.argv[1]).update(state='done')\n"
+    with status.locked():
+        p = subprocess.Popen([sys.executable, "-c", code, status.path])
+        time.sleep(1.0)
+        assert p.poll() is None  # waiting for the lock
+        assert status._load()["state"] == "running"
+        write_json_atomic(status.path, {**status._load(), "n": 2})
+    assert p.wait(20) == 0
+    assert (status.read()["state"], status.read()["n"]) == ("done", 2)  # merged on top, nothing lost
 
 
 def test_detached_refuses_a_second_start_and_stops_the_first(tmp_path):

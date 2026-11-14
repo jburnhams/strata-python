@@ -27,7 +27,7 @@ import json
 import os
 import subprocess
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from typing import Any, cast
 
 from strata_python import oslib
@@ -64,17 +64,27 @@ class StatusFile:
             raise RuntimeError(f"{ENV} is not set: this process was not started by Detached")
         return cls(path)
 
+    @contextlib.contextmanager
+    def locked(self) -> Generator[None]:
+        """Hold the file's lock (`<path>.lock`, across processes): `write` and `update` take it, so a merge never
+        loses another writer's fields. Not re-entrant: inside it, write the file with `write_json_atomic`."""
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        with open(self.path + ".lock", "a+") as f, oslib.file_lock(f):
+            yield
+
     def write(self, state: str, **fields: Any) -> Json:
         """Replace the file: `state`, this process's pid (unless given), the time, and `fields`."""
         data: Json = {"state": state, "pid": os.getpid(), "at": _now(), **fields}
-        write_json_atomic(self.path, data)
+        with self.locked():
+            write_json_atomic(self.path, data)
         return data
 
     def update(self, **fields: Any) -> Json:
         """Merge `fields` into the file as it is (the state and pid stay unless given)."""
-        data: Json = {**(self._load() or {}), **fields, "at": _now()}
-        data.setdefault("pid", os.getpid())
-        write_json_atomic(self.path, data)
+        with self.locked():
+            data: Json = {**(self._load() or {}), **fields, "at": _now()}
+            data.setdefault("pid", os.getpid())
+            write_json_atomic(self.path, data)
         return data
 
     def _load(self) -> Json | None:
@@ -143,7 +153,9 @@ class Detached:
         os.makedirs(os.path.dirname(os.path.abspath(self.log)), exist_ok=True)
         env = {**os.environ, **(self.env or {}), ENV: os.path.abspath(self.status.path)}
         detach = oslib.detached_kwargs()
-        with open(self.log, "ab") as out:
+        # The file is written under its lock, taken before the child exists: a child that reports (or finishes) at
+        # once waits for it, so its update lands on top of this one instead of under it.
+        with self.status.locked(), open(self.log, "ab") as out:
             proc: subprocess.Popen[bytes] = subprocess.Popen(  # noqa: S603 - the app's own command
                 self.cmd,
                 stdin=subprocess.DEVNULL,
@@ -154,8 +166,9 @@ class Detached:
                 start_new_session=bool(detach.get("start_new_session", False)),
                 creationflags=int(detach.get("creationflags", 0)),
             )
+            data = {"state": "running", "pid": proc.pid, "at": _now(), "cmd": self.cmd, "log": self.log, **fields}
+            write_json_atomic(self.status.path, data)
         self._proc = proc
-        self.status.write("running", pid=proc.pid, cmd=self.cmd, log=self.log, **fields)
         return proc.pid
 
     def stop(self, timeout: float = 10.0) -> bool:

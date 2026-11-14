@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import MetaData
 
 import strata_python.db as db
+from strata_python.contracts import Progress
 from strata_python.db import guard, testserver
 from strata_python.db.scratch import scratch_database
 from strata_python.db.testing import scratch_engine
@@ -95,6 +96,67 @@ def test_a_held_resource_keeps_the_next_job_waiting(setup):
     assert q.claim() is None
     q.finish(first)
     assert q.claim().id == gpu2
+
+
+def test_jobs_waiting_on_a_resource_do_not_hide_the_ones_behind_them(setup):
+    """Review on PR #25: candidates were read 200 at a time and no further, so 200 jobs waiting for the GPU stalled
+    every job after them. Here the batch is 2 and four jobs wait."""
+    q, _, _ = setup
+    q.batch = 2
+    holder = q.enqueue("ocr", resources=["gpu"], priority=9)
+    for i in range(4):  # two priorities, so the next batch has to start after (priority, id), not just id
+        q.enqueue("ocr", resources=["gpu"], priority=i % 2)
+    free = q.enqueue("hash", resources=["disk"])
+    assert q.claim().id == holder
+    assert q.claim().id == free  # found in the third batch, behind four that wait for the GPU
+    assert q.claim() is None
+
+
+def test_claims_from_another_queue_wait_for_the_one_in_progress(setup):
+    """Review on PR #25: a lock in this process does not reach another process or Queue. The second claimer must wait
+    while the first is between reading the held resources and claiming (the write lock on SQLite, the advisory lock
+    on Postgres)."""
+    q, clock, _ = setup
+    q.enqueue("ocr", resources=["gpu"])
+    q.enqueue("faces", resources=["gpu"])
+    other = Queue(q.engine, q.t, clock=clock, owner="another-host:1")
+    got: list[Job | None] = []
+    with q._serialised():
+        t = threading.Thread(target=lambda: got.append(other.claim()))
+        t.start()
+        t.join(0.5)
+        assert t.is_alive()  # waiting on the claim in progress, not reading the resources around it
+    t.join(20)
+    assert len(got) == 1
+    assert got[0] is not None
+    assert q.claim() is None  # the GPU is now held by the other queue's job
+
+
+def test_a_recovered_attempt_cannot_write_over_its_replacement(setup):
+    """Review on PR #25: a worker that was only slow, whose job was recovered and claimed again, must not finish,
+    fail, release or report on the new attempt; its heartbeat tells it to stop."""
+    q, clock, _ = setup
+    failed: list[int] = []
+    q.on_fail = lambda _c, job, _e: failed.append(job.id)
+    jid = q.enqueue("ocr")
+    slow = q.claim()
+    clock.t += 301
+    assert q.recover(stale_s=300) == [jid]
+    clock.t += 3600  # past the backoff
+    fresh = Queue(q.engine, q.t, clock=clock, owner="another-host:1").claim()
+    assert fresh is not None
+    assert (fresh.id, fresh.token != slow.token) == (jid, True)
+    q.report(slow, Progress(done=9, total=10))
+    q.finish(slow, {"old": True})
+    q.release(slow)
+    q.retries = 0
+    q.fail(slow, OSError("late"))
+    got = q.get(jid)
+    assert (got.state, got.result, got.progress, got.token) == ("running", None, None, fresh.token)
+    assert failed == []
+    assert not q.heartbeat(slow)  # its job is someone else's now
+    assert slow.stopping
+    assert q.heartbeat(fresh)
 
 
 def test_failures_retry_with_backoff_then_fail_and_call_on_fail(setup):
