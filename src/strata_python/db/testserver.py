@@ -173,7 +173,10 @@ def url() -> str:
         raise RuntimeError(f"initdb failed for the private test server:\n{r.stderr}")
     if WIN:  # no Unix sockets for libpq here: loopback only, on a port nobody else has
         port = _free_port()
-        listen = f"-c listen_addresses=127.0.0.1 -p {port} -c unix_socket_directories=''"
+        # In the config file, not -o: pg_ctl's command line on Windows keeps the quotes of '' as the folder's name.
+        with open(os.path.join(data, "postgresql.auto.conf"), "a", encoding="utf-8") as conf:
+            conf.write("unix_socket_directories = ''\n")
+        listen = f"-c listen_addresses=127.0.0.1 -p {port}"
         where = f"127.0.0.1:{port}/postgres"
     else:
         listen = f"-k {d} -c listen_addresses=''"
