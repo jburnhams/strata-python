@@ -179,3 +179,18 @@ def test_a_supervised_child_ends_its_group_when_the_parent_end_of_the_lifeline_c
 def test_watch_supervisor_needs_a_supervisor(monkeypatch):
     monkeypatch.delenv(oslib.SUPERVISED_ENV, raising=False)
     assert not oslib.watch_supervisor()
+
+
+def test_stdout_to_stderr_moves_what_the_process_and_its_tools_print():
+    code = (
+        "import os, subprocess, sys\n"
+        "from strata_python import oslib\n"
+        "out = os.fdopen(oslib.stdout_to_stderr(), 'w')\n"
+        "print('from me', flush=True)\n"
+        "subprocess.run([sys.executable, '-c', 'print(\"from a tool\")'], check=True, timeout=20)\n"
+        "out.write('the answer\\n')\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=True)
+    assert r.stdout == "the answer\n"
+    assert "from me" in r.stderr
+    assert "from a tool" in r.stderr

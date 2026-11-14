@@ -21,7 +21,7 @@ from strata_python.db import guard, testserver
 from strata_python.db.scratch import scratch_database
 from strata_python.db.testing import scratch_engine
 from strata_python.tasks import RetryLater, child, report_progress
-from strata_python.tasks.queue import Job, JobCancelled, Queue, Worker, WorkerLost, dedupe_key, jobs_table
+from strata_python.tasks.queue import ACTIVE, Job, JobCancelled, Queue, Worker, WorkerLost, dedupe_key, jobs_table
 
 # As in test_db.py: CI sets STRATA_TEST_PG=1, so a missing Postgres fails there instead of skipping.
 PG = os.environ.get("STRATA_TEST_PG") == "1" or (os.name != "nt" and os.geteuid() != 0 and testserver.available())
@@ -465,7 +465,8 @@ def test_job_processes_are_reused_and_replaced_only_when_killed(setup, tmp_path)
         assert pids != {os.getpid()}
         assert per_job < 0.25, per_job  # a pipe round trip and a few row writes, not an interpreter start
         chat = q.enqueue("chatty")
-        wait_for(lambda: q.get(chat).state == "done", q.counts)
+        wait_for(lambda: q.get(chat).state not in ACTIVE, lambda: (q.counts(), q.get(chat).error))
+        assert (q.get(chat).state, q.get(chat).error) == ("done", None)
         assert q.get(chat).result in pids  # printing did not break the protocol or the process
         long = q.enqueue("spawn", {"pids": str(tmp_path / "pids")})
         _pids(tmp_path / "pids")

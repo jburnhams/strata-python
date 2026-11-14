@@ -60,7 +60,7 @@ def spawn_and_wait(job: Job) -> None:
 def chatty(job: Job) -> int:
     """Prints, and runs a tool that prints: neither may end up in the answers on the process's stdout."""
     print("a line from the handler")
-    subprocess.run([sys.executable, "-c", "print('a line from a tool')"], check=True)
+    subprocess.run([sys.executable, "-c", "print('a line from a tool')"], check=True, timeout=20)
     return os.getpid()
 
 

@@ -133,8 +133,8 @@ def main(
     spec = cast("Json", json.loads(os.environ.pop(ENV)))
     os.environ.pop(oslib.SUPERVISED_ENV, None)  # the lifeline is watched here; the job's own children are not
     if replies is None:
-        replies = os.fdopen(os.dup(1), "w", encoding="utf8", buffering=1)
-        os.dup2(2, 1)  # print() and tools write to the server's log, never into the answers
+        # print() and the tools a handler runs write to the server's log, never into the answers
+        replies = os.fdopen(oslib.stdout_to_stderr(), "w", encoding="utf8", buffering=1)
     lines: IO[str] = sys.stdin if commands is None else commands
     if spec.get("lower_priority"):
         oslib.lower_priority(io=True)

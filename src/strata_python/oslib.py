@@ -207,6 +207,21 @@ def start_supervised(
     )
 
 
+def stdout_to_stderr() -> int:
+    """Point this process's stdout at its stderr, for it and every process it starts, and return a new fd on the old
+    stdout (for a child that answers its parent there). On Windows the Win32 standard handle is moved too: moving
+    fd 1 alone leaves the handle a started tool inherits on the old pipe."""
+    sys.stdout.flush()
+    saved = os.dup(1)
+    os.dup2(2, 1)
+    if WIN:
+        import ctypes
+        import msvcrt
+
+        ctypes.windll.kernel32.SetStdHandle(-11, msvcrt.get_osfhandle(2))  # STD_OUTPUT_HANDLE
+    return saved
+
+
 def watch_supervisor() -> bool:
     """In a child that `start_supervised` started: end this process group when the parent's end of the lifeline
     closes (the parent exited, crashed or was killed), so no tool is left running for a server that is gone. True
