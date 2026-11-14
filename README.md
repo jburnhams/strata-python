@@ -23,10 +23,34 @@ The goal: an app keeps only its plumbing and business logic, and everything else
 ```toml
 # pyproject.toml
 [project]
-dependencies = ["strata-python>=0.2,<0.3"]   # while 0.x a minor release may break, so cap below the next one
+dependencies = [
+    "strata-python>=0.2,<0.3",   # brings FastAPI, uvicorn, pydantic and pytest; while 0.x, cap below the next minor
+    # ... only what is the app's own: torch, opencv, yt-dlp ...
+]
+
+[dependency-groups]
+dev = ["strata-python[dev]"]     # ruff, pyright, ty, httpx and the pytest plugins, at the versions strata-check expects
 ```
 
-Delete any `[tool.uv.sources] strata-python = { git = ... }` entry and run `uv lock`. Dependabot (`package-ecosystem: uv`) then raises the bumps. To try an unreleased commit, put a `git` source with `rev = "<sha>"` back for the moment.
+Delete from the app's own lists everything strata-python already brings (fastapi, uvicorn, pydantic, pytest, ruff, pyright, ty, pytest-cov, pytest-xdist, pytest-randomly, pytest-timeout, httpx) and any `[tool.uv.sources] strata-python = { git = ... }` entry, then run `uv lock`. To try an unreleased commit, put a `git` source with `rev = "<sha>"` back for the moment.
+
+The shared versions are decided here: strata-python sets a minimum (what its CI tested) and a cap (the next release that may break) for each, and its own dependabot keeps them current. Each app still has its own `uv.lock`, so one dependabot PR a week per app is the floor; make it one, not one per package:
+
+```yaml
+# .github/dependabot.yml in the app
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule: { interval: weekly }
+    groups: { python: { patterns: ["*"] } }   # strata-python and everything else in one PR
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+    groups: { actions: { patterns: ["*"] } }
+```
+
+Security updates still arrive on their own as soon as they are published; keep them on.
 
 ### 2. The gate
 
