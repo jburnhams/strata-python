@@ -76,9 +76,11 @@ def _prepare(conn: Connection, owner_role: str | None, schema: str | None = None
 
 def _run(engine: Engine, owner_role: str | None, fn: Callable[[Connection], object], schema: str | None = None) -> None:
     """Run fn(conn) in one transaction. On SQLite, foreign-key enforcement is switched off around it (the pragma
-    only takes effect outside a transaction): batch mode recreates a table by copy, drop and rename, and dropping a
-    table that other rows reference would fail or cascade. Before committing, PRAGMA foreign_key_check must come
-    back empty, otherwise everything is rolled back; enforcement is switched back on either way."""
+        only takes effect outside a transaction): batch mode recreates a table by copy, drop and rename, and dropping a
+        table that other rows reference would fail or cascade. Before committing, PRAGMA foreign_key_check must come
+        back empty, otherwise everything is rolled back; enforcement is switched back on either way. The SQLite transaction
+    is begun explicitly: the driver would otherwise run the DDL outside one, and a failed revision would leave half its
+    tables behind."""
     with engine.connect() as conn:
         sqlite = conn.dialect.name == "sqlite"
         if sqlite:
@@ -86,6 +88,8 @@ def _run(engine: Engine, owner_role: str | None, fn: Callable[[Connection], obje
             conn.commit()
         try:
             with conn.begin():
+                if sqlite:  # pysqlite begins only before DML, so DDL would commit as it ran (review finding)
+                    conn.exec_driver_sql("BEGIN")
                 _prepare(conn, owner_role, schema)
                 fn(conn)
                 if sqlite and (bad := conn.exec_driver_sql("PRAGMA foreign_key_check").fetchall()):

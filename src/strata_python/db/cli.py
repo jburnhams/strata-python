@@ -73,6 +73,10 @@ def cmd_new_app(a: argparse.Namespace) -> None:
         if not c.execute(text("SELECT 1 FROM pg_roles WHERE rolname = :n"), {"n": name}).scalar():
             c.execute(text(f"CREATE ROLE {q(name)} NOLOGIN"))
             print(f"created role {name}")
+        # The schema below is created AUTHORIZATION the role, which needs the caller to be able to SET ROLE to it. A
+        # CREATEROLE login gets only ADMIN on a role it creates unless the server sets createrole_self_grant, so
+        # grant it explicitly (a no-op notice when the caller is a member already, a superuser included).
+        c.execute(text(f"GRANT {q(name)} TO CURRENT_USER"))
         if not c.execute(text("SELECT 1 FROM pg_database WHERE datname = :n"), {"n": database}).scalar():
             c.execute(text(f"CREATE DATABASE {q(database)}"))
             print(f"created database {database}")

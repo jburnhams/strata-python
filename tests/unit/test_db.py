@@ -786,3 +786,48 @@ def test_fixtures_on_postgres(pytester: pytest.Pytester, how: str, monkeypatch: 
     pytester.makepyfile(test_app=APP_TESTS)
     result = pytester.runpytest_inprocess(*(["--pg"] if how == "--pg" else []), "-p", "no:randomly")
     result.assert_outcomes(passed=4)
+
+
+def test_a_failed_sqlite_migration_rolls_back_its_ddl(app: Path, tmp_path: Path):
+    """pysqlite does not begin a transaction before DDL by itself: a revision that creates a table and then fails
+    must leave no table behind (review finding)."""
+    strata_db(app, "revision", "-m", "initial", "--sqlite")
+    url = f"sqlite:///{tmp_path / 'ddl.db'}"
+    strata_db(app, "migrate", "--url", url)
+    eng = db.connect(url)
+    head = current(eng)
+    p = Project.load(app)
+    (p.migrations_dir / "zz_half.py").write_text(
+        f"from alembic import op\nimport sqlalchemy as sa\nrevision = 'half0001'\ndown_revision = '{head}'\n"
+        "branch_labels = None\ndepends_on = None\n"
+        "def upgrade():\n    op.create_table('half', sa.Column('id', sa.Integer, primary_key=True))\n"
+        "    raise RuntimeError('fails after its DDL')\n"
+        "def downgrade(): pass\n"
+    )
+    with pytest.raises(RuntimeError, match="fails after its DDL"):
+        p.upgrade(eng)
+    assert "half" not in inspect(eng).get_table_names()
+    assert current(eng) == head
+    eng.dispose()
+
+
+@needs_pg
+def test_new_app_as_a_createrole_login_that_is_not_superuser(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The documented setup: the login running new-app has CREATEDB and CREATEROLE, not superuser (review finding)."""
+    creator, shared = f"creator_{uuid.uuid4().hex[:6]}", f"strata_db_shared_{uuid.uuid4().hex[:8]}"
+    name = f"c{uuid.uuid4().hex[:6]}"
+    adm = create_engine(admin_url(), isolation_level="AUTOCOMMIT")
+    with adm.connect() as c:
+        c.execute(text(f'CREATE ROLE "{creator}" LOGIN CREATEDB CREATEROLE'))
+    try:
+        as_creator = create_engine(admin_url()).url.set(username=creator).render_as_string(hide_password=False)
+        monkeypatch.setenv("STRATA_DB_TEST_ADMIN_URL", as_creator)
+        root = make_app(tmp_path / name, name=name)
+        out = strata_db(root, "new-app", "--database", shared).stdout
+        assert f"created schema {shared}.{name}" in out
+    finally:
+        with adm.connect() as c:
+            c.execute(text(f'DROP DATABASE IF EXISTS "{shared}" WITH (FORCE)'))
+            c.execute(text(f'DROP ROLE IF EXISTS "{name}"'))
+            c.execute(text(f'DROP ROLE IF EXISTS "{creator}"'))
+        adm.dispose()
