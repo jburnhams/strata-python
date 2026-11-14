@@ -18,6 +18,8 @@ Without `strata_env_prefix` the plugin changes nothing but the no-network guard 
   fake_popen              `subprocess.Popen` starts nothing; `.instances` lists what was asked (`.cmd`, `.kw`), fresh for each test.
   fake_run                `subprocess.run` / `check_output`: `.returns["ffprobe"] = b"..."` for output, `.code = 1` to fail, `.calls`.
   no_sleep                `time.sleep` returns at once; `.delays` records the waits.
+  fake_models             a stand-in strata-models on a real loopback port, with STRATA_MODELS_URL pointing at it: the app's own
+                          `strata_python.clients.models` calls run unchanged. `.results`, `.fail(...)`, `.busy`, `.down`, `.jobs`.
 The fakes are a last resort for a true external edge (strata_python.testing says when); prefer `http_server` and real programs."""
 
 import contextlib
@@ -147,3 +149,11 @@ def no_sleep(monkeypatch: pytest.MonkeyPatch) -> testing.Sleeper:
     sleeper = testing.Sleeper()
     monkeypatch.setattr(time, "sleep", sleeper)
     return sleeper
+
+
+@pytest.fixture
+def fake_models(monkeypatch: pytest.MonkeyPatch) -> Iterator[testing.FakeModels]:
+    fake = testing.FakeModels()
+    with live_server(fake.app) as base:
+        monkeypatch.setenv("STRATA_MODELS_URL", base)
+        yield fake

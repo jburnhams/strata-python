@@ -118,3 +118,92 @@ def test_lower_priority_io_in_a_child_reaches_its_children():
 
 def test_lower_priority_in_this_process_with_no_change():
     oslib.lower_priority(0)  # nice(0) is a no-op, so this process keeps its priority
+
+
+def test_detached_kwargs_start_a_new_session():
+    import os
+
+    kw = oslib.detached_kwargs()
+    if oslib.WIN:  # no sessions to read back: the flags must still start a process that runs and answers
+        p = subprocess.Popen([sys.executable, "-c", "print('ok')"], stdout=subprocess.PIPE, text=True, **kw)
+        out, _ = p.communicate(timeout=20)
+        assert out.strip() == "ok"
+        assert p.returncode == 0
+        return
+    p = subprocess.Popen(
+        [sys.executable, "-c", "import os; print(os.getsid(0))"], stdout=subprocess.PIPE, text=True, **kw
+    )
+    out, _ = p.communicate(timeout=20)
+    assert int(out) == p.pid != os.getsid(0)  # its own session, so the server's signals do not reach it
+
+
+def test_load_average():
+    load = oslib.load_average()
+    if oslib.WIN:  # Windows has no load average; the status page shows none rather than failing
+        assert load is None
+        return
+    assert load is not None
+    assert len(load) == 3
+
+
+LIFELINE_CHILD = """
+import os, subprocess, sys, time
+from strata_python import oslib
+assert oslib.watch_supervisor()
+assert oslib.SUPERVISED_ENV not in os.environ  # its own children are not supervised by it
+tool = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+open(sys.argv[1], "w").write(f"{os.getpid()} {tool.pid}")
+time.sleep(120)
+"""
+
+
+def test_a_supervised_child_ends_its_group_when_the_parent_end_of_the_lifeline_closes(tmp_path):
+    """A server that crashes closes the pipe the same way: the job and the tool it started must not outlive it."""
+    pids = tmp_path / "pids"
+    p = oslib.start_supervised([sys.executable, "-c", LIFELINE_CHILD, str(pids)])
+    deadline = time.monotonic() + 30
+    while not (pids.exists() and len(pids.read_text().split()) == 2):
+        assert time.monotonic() < deadline
+        assert p.poll() is None
+        time.sleep(0.02)
+    child, tool = (int(x) for x in pids.read_text().split())
+    assert oslib.pid_alive(tool)
+    assert p.stdin is not None
+    p.stdin.close()
+    assert p.wait(30) != 0
+    while oslib.pid_alive(tool) or oslib.pid_alive(child):
+        assert time.monotonic() < deadline, (child, tool)
+        time.sleep(0.02)
+
+
+def test_watch_supervisor_needs_a_supervisor(monkeypatch):
+    monkeypatch.delenv(oslib.SUPERVISED_ENV, raising=False)
+    assert not oslib.watch_supervisor()
+
+
+def test_stdout_to_stderr_moves_what_the_process_and_its_tools_print():
+    code = (
+        "import os, subprocess, sys\n"
+        "from strata_python import oslib\n"
+        "import threading\n"
+        "out = os.fdopen(oslib.stdout_to_stderr(), 'w')\n"
+        "commands = open(oslib.stdin_from_devnull())\n"
+        "threading.Thread(target=commands.read, daemon=True).start()  # blocked on the pipe, as the job loop is\n"
+        "print('from me', flush=True)\n"
+        "tool = 'import sys; print(\"from a tool, stdin \" + repr(sys.stdin.read()))'\n"
+        "subprocess.run([sys.executable, '-c', tool], check=True, timeout=20)\n"
+        "out.write('the answer\\n')\n"
+    )
+    p = subprocess.Popen(
+        [sys.executable, "-c", code], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    assert p.stdout is not None
+    assert p.stdin is not None
+    answer = p.stdout.readline()  # its stdin stays open meanwhile, so the reader thread is blocked on it
+    p.stdin.close()  # (communicate() would flush the closed stdin and fail on 3.11 and 3.12)
+    assert p.stderr is not None
+    out, err = p.stdout.read(), p.stderr.read()
+    assert p.wait(60) == 0, err
+    assert answer + out == "the answer\n"
+    assert "from me" in err
+    assert "from a tool, stdin ''" in err

@@ -9,9 +9,10 @@ import contextlib
 import os
 import subprocess
 import sys
+import threading
 import time
-from collections.abc import Generator
-from typing import IO, Any, cast
+from collections.abc import Generator, Mapping
+from typing import IO, Any, Literal, cast, overload
 
 WIN = sys.platform == "win32"
 
@@ -154,3 +155,131 @@ def venv_python(venv: str) -> str:
 def cli_command(module: str) -> list[str]:
     """Command prefix that runs `module` (`python -m <module>`) with the interpreter running this process: works on POSIX and Windows, with or without a venv, and does not touch the environment."""
     return [sys.executable, "-m", module]
+
+
+def detached_kwargs() -> dict[str, Any]:
+    """`subprocess.Popen` keyword arguments that start a process outside this one's session (POSIX) or console and
+    process group (Windows), so it keeps running when the server that started it restarts, and a Ctrl+C or a stopped
+    service unit aimed at the server does not reach it. `kill_tree` still stops it and its children."""
+    if WIN:
+        return {"creationflags": 0x00000200 | 0x00000008}  # CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+    return {"start_new_session": True}
+
+
+def load_average() -> tuple[float, float, float] | None:
+    """The 1, 5 and 15 minute load averages, or None where the OS has none (Windows)."""
+    try:
+        return os.getloadavg()
+    except (AttributeError, OSError):
+        return None
+
+
+# --- supervised children: listory's per-job process groups -----------------------------------------------------------
+
+SUPERVISED_ENV = "STRATA_SUPERVISED"
+
+
+@overload
+def start_supervised(
+    cmd: list[str], *, env: Mapping[str, str] | None = None, cwd: str | None = None, text: Literal[False] = False
+) -> subprocess.Popen[bytes]: ...
+@overload
+def start_supervised(
+    cmd: list[str], *, env: Mapping[str, str] | None = None, cwd: str | None = None, text: Literal[True]
+) -> subprocess.Popen[str]: ...
+def start_supervised(
+    cmd: list[str], *, env: Mapping[str, str] | None = None, cwd: str | None = None, text: bool = False
+) -> subprocess.Popen[Any]:
+    """Start `cmd` in its own process group, with a lifeline on its stdin, so that `kill_group` stops it and every
+    tool it started, and so that it stops itself when this process dies, however it dies (`watch_supervisor`, called
+    in the child, sees the pipe close). `text=True` also pipes its stdout, as text, for a child that answers on it
+    (`tasks.child`); otherwise its output goes where this process's goes."""
+    return subprocess.Popen(  # noqa: S603 - the app's own command
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE if text else None,
+        text=text,
+        encoding="utf8" if text else None,
+        env={**(env or os.environ), SUPERVISED_ENV: "1"},
+        cwd=cwd,
+        start_new_session=not WIN,
+        creationflags=0x00000200 if WIN else 0,  # CREATE_NEW_PROCESS_GROUP
+    )
+
+
+def stdout_to_stderr() -> int:
+    """Point this process's stdout at its stderr, for it and every process it starts, and return a new fd on the old
+    stdout (for a child that answers its parent there). On Windows the Win32 standard handle is moved too: moving
+    fd 1 alone leaves the handle a started tool inherits on the old pipe."""
+    sys.stdout.flush()
+    saved = os.dup(1)
+    os.dup2(2, 1)
+    if WIN:
+        import ctypes
+        import msvcrt
+
+        ctypes.windll.kernel32.SetStdHandle(-11, msvcrt.get_osfhandle(2))  # STD_OUTPUT_HANDLE
+    return saved
+
+
+def stdin_from_devnull() -> int:
+    """Give this process (and every process it starts) an empty stdin, and return a new fd on the old one, for a
+    child that reads its parent's commands there. On Windows this is what keeps a tool from hanging: a thread blocked
+    reading a synchronous pipe holds that pipe, and a tool that inherits it as stdin blocks starting up."""
+    saved = os.dup(0)
+    null = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(null, 0)
+    os.close(null)
+    if WIN:
+        import ctypes
+        import msvcrt
+
+        ctypes.windll.kernel32.SetStdHandle(-10, msvcrt.get_osfhandle(0))  # STD_INPUT_HANDLE
+    sys.stdin = open(0, closefd=False)  # noqa: SIM115 - fd 0 for the life of the process
+    return saved
+
+
+def watch_supervisor() -> bool:
+    """In a child that `start_supervised` started: end this process group when the parent's end of the lifeline
+    closes (the parent exited, crashed or was killed), so no tool is left running for a server that is gone. True
+    when it is watching; False when this process was not started that way."""
+    if os.environ.pop(SUPERVISED_ENV, None) != "1":  # popped: this process's own children are not supervised by it
+        return False
+
+    def watch() -> None:
+        try:
+            while os.read(0, 1):  # the parent never writes: this returns b"" (EOF) when its end closes
+                pass
+        finally:
+            terminate_own_group()
+
+    threading.Thread(target=watch, name="strata-supervisor-watch", daemon=True).start()
+    return True
+
+
+def terminate_own_group() -> None:
+    """Kill this process and everything in its group (or, on Windows, its process tree), at once."""
+    if WIN:
+        kill_tree(os.getpid())
+    elif os.getpgrp() == os.getpid():  # only a group this process leads, never the server's own session
+        import signal
+
+        with contextlib.suppress(OSError):
+            os.killpg(os.getpid(), signal.SIGKILL)
+    os._exit(1)
+
+
+def kill_group(proc: subprocess.Popen[Any], timeout: float = 5.0) -> None:
+    """Stop a `start_supervised` child and every process in its group now, and reap it."""
+    if WIN:
+        kill_tree(proc.pid)
+    else:
+        import signal
+
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout)
+    if proc.stdin is not None:
+        with contextlib.suppress(OSError):
+            proc.stdin.close()

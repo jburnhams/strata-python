@@ -121,3 +121,38 @@ def test_run_module_runs_a_real_process(tmp_path):
     with pytest.raises(AssertionError, match="python -m tinyapp exited 1"):
         run_module("tinyapp", "one", "two", src=tmp_path)
     assert run_module("json.tool", "--help").code == 0
+
+
+def test_fake_models_scripts_results_failures_and_outages(fake_models):
+    from strata_python.clients import models as sm
+
+    fake_models.results["ocr"] = lambda params: {"text": params["lang"], "width": 1, "height": 1, "lines": []}
+    assert sm.OcrPage.from_json(sm.ocr("p.png", app="strata-scan", lang="fra")).text == "fra"
+    fake_models.fail("CUDA out of memory", role="faces")
+    assert sm.transcribe("a.wav", app="x")["language"] == "en"  # the failure waits for a faces job
+    with pytest.raises(sm.JobFailed, match="CUDA out of memory"):
+        sm.faces("a.jpg", app="x")
+    assert sm.faces("a.jpg", app="x")["width"] == 640  # used once
+    assert [j["role"] for j in fake_models.jobs] == ["ocr", "transcribe", "faces", "faces"]
+    with pytest.raises(sm.JobFailed, match="no job 99"):
+        sm.wait_job(99)
+    del fake_models.results["speak"]
+    with pytest.raises(sm.JobFailed, match="unknown role"):
+        sm.speak("hi", app="x")
+    fake_models.down = True
+    assert not sm.available()
+    fake_models.down = False
+    assert sm.available()
+
+
+def test_fake_models_finishes_on_the_first_poll_when_asked(live_app, monkeypatch):
+    from strata_python.clients import models as sm
+    from strata_python.testing import FakeModels
+
+    fake = FakeModels({"text": {"text": "hi"}}, running_polls=0)
+    with live_app(fake.app) as base:
+        monkeypatch.setenv("STRATA_MODELS_URL", base)
+        job = sm.submit("text", {"prompt": "x"}, app="x")
+        assert sm.wait(job["id"], timeout=0) == {"text": "hi"}  # no running poll first
+        with pytest.raises(sm.JobFailed, match="no lease 7"):
+            sm._call("POST", "/api/leases/7/heartbeat")

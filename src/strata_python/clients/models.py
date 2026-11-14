@@ -38,14 +38,17 @@ from collections.abc import Generator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
+from strata_python import client
+
 Json = dict[str, Any]
 Priority = Literal["high", "normal", "low"]
 POLL_S = 30  # one long-poll request waits this long at most
 DEFAULT_URL = "http://127.0.0.1:8366"
 
 
-class Unavailable(RuntimeError):
-    """The service is not running (or not reachable)."""
+class Unavailable(client.Unavailable):
+    """The service is not running (or not reachable). A `strata_python.client.Unavailable`, so an app's
+    `web.add_error_handlers` answers it as 503 like any other service outage."""
 
 
 class JobFailed(RuntimeError):

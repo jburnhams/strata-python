@@ -4,14 +4,17 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 
 | Module | What it gives an app |
 |---|---|
-| `strata_python.oslib` | Cross-platform file locks, process liveness (`pid_alive`), `kill_tree`, `lower_priority`, `venv_python`, `cli_command(module)` |
+| `strata_python.oslib` | Cross-platform file locks, process liveness (`pid_alive`), `kill_tree`, `lower_priority`, `detached_kwargs`, `load_average`, `start_supervised`/`watch_supervisor`/`kill_group` (a child in its own process group that dies with its parent), `venv_python`, `cli_command(module)` |
 | `strata_python.settings` | `Settings` / `Setting` / `ListSetting`: one JSON file in `~/.<app>` with `<APP>_*` environment overrides, validation (`absolute_path`, `non_empty`, `number_between`, `whole_between`, `iso_date`, `boolean`), typed getters, atomic saves, and `bind(store)` to keep them elsewhere (`strata_python.db.settings.TableStore`) |
-| `strata_python.web` | `base_app` (health with the app's own fields + settings routes), `add_web` (built web app or stand-in page at every non-API path), `with_base` (reverse-proxy-safe `<base href>`), `static_file` (path-safe), `serve` |
+| `strata_python.web` | `base_app` (health with the app's own fields and `commit` + typed settings routes), `add_error_handlers` (exceptions to `ErrorBody` responses), `add_system` (`GET /api/system`: folders, disks, services), `source_commit`, `add_web` (built web app or stand-in page at every non-API path), `with_base` (reverse-proxy-safe `<base href>`), `static_file` (path-safe), `serve` |
 | `strata_python.cli` | `add_doctor` (imports, labels, optional modules and the app's own `Check`s), `add_set`, `add_serve` for the app's argparse subcommands |
+| `strata_python.contracts` | The shapes the apps' APIs share, as pydantic models for `response_model`: `Health`, `SystemInfo`, `ErrorBody`, `Task` (with `TaskState`), `Progress`, `Page[T]`, `FileRef`, `Judgment` |
+| `strata_python.client` | `ServiceClient`, the standard-library base for calling a strata service: JSON calls, `Rejected` (4xx, with the reason and payload) and `Unavailable` (down or 5xx), retried reads, a long-poll `wait`, `available()`, and `env_url` |
+| `strata_python.tasks` | Work outside a request: `next_state`/`backoff_s`/`RetryLater` (when to retry), `report_progress` and `ProgressReporter` (throttled), `SingleFlight` (one run per key, `Conflict` on a second), `StatusFile` and `Detached` (a process that outlives the server), `Ticker` (a loop that survives its errors), and with the `[db]` extra `tasks.queue` (`Queue`, `Worker`, `jobs_table`: durable jobs with retry, dedupe, resources, cancel and crash recovery) |
 | `strata_python.clients.models` | The strata-models client, standard library only: `run`, `submit`, `wait`, `role_model`, `gpu_lease`, a shortcut for every role the service runs (`faces`, `face_kind`, `transcribe`, `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed`, `enhance_video`, and `ask` for the language models) and a typed result for each |
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
-| pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, and the `integration` marker on everything under `tests/integration` |
-| `strata_python.testing` | The fakes behind those fixtures (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) and the CLI runners `run_cli(main, *args)` and `run_module("myapp", *args, src=...)` |
+| pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, `fake_models` (a stand-in strata-models), and the `integration` marker on everything under `tests/integration` |
+| `strata_python.testing` | The fakes behind those fixtures (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) `FakeModels`, and the CLI runners `run_cli(main, *args)` and `run_module("myapp", *args, src=...)` |
 | `strata_python.db` (extra `[db]`) | The shared database: `connect("myapp")` (the app's schema of one shared Postgres, or a SQLite path), a declarative base with the shared `NAMING_CONVENTION` for typed models, Alembic migrations with no per-app `env.py`, the live-database guard, the `strata-db` command, and the `db_*` fixtures (SQLite by default, a throwaway Postgres with `--pg`) |
 | `strata_python.pages` (extra `[pdf]`) | A scanned page described as blocks, lines, styled spans and figures in scan pixels, drawn as a PDF with real embedded fonts (`render`), and read back as pixels at the scan's dpi (`rasterise`) and as text (`read_text`): for rebuilding scanned books, and for scoring a rebuild with the renderer that prints it |
 | `strata-check` | The one gate: lockfile, ruff, `ruff format`, pyright strict, ty, unit tests with coverage |
@@ -114,6 +117,18 @@ def create_app():
     return app
 ```
 
+Two more that replace code most servers carry:
+
+```python
+web.add_error_handlers(app)          # ValueError 400, PermissionError 403, KeyError and FileNotFoundError 404,
+                                     # tasks.Conflict 409, client.Rejected 502, client.Unavailable 503: {detail, payload}
+web.add_system(app, __version__, commit=web.source_commit(__file__),
+               folders={"data": lambda: SETTINGS.get("data_dir")},
+               services={"strata-models": "http://127.0.0.1:8366"})   # GET /api/system, a SystemInfo
+```
+
+Delete the app's `guard()` (or each route's `try/except` raising `HTTPException`), passing its own exceptions as `add_error_handlers(app, {BookLocked: 423})`, and its `/api/system` route. Give `base_app` the same `commit=` so `/api/health` says which source the server runs. Declare a route's answer with a shape from `strata_python.contracts` (`response_model=Page[Task]`) where the app already returns that shape, so the web app's types can come from `/api/openapi.json`.
+
 Delete the app's own `/api/health` and `/api/settings` routes, its `/assets` mount, SPA fallback, `with_base` and `static_file` copies and its `uvicorn.run` wrapper. `web.serve(app, argv, default_port=...)` replaces the last of these. For health fields of the app's own, pass `health=lambda: {"gpu": gpu_name()}`: they follow `ok` and `version`, and may set `ok` to false. It runs on every request, so keep it cheap.
 
 ### 5. The CLI
@@ -167,11 +182,33 @@ with sm.gpu_lease("strata-stills", vram_gb=4):
     run_my_own_cuda_code()
 ```
 
-The shortcuts still return the service's JSON, so existing code keeps working, and the result classes keep all of it in `.raw`. There is one shortcut for every role the service runs (`sm.ROLES`): `faces`, `face_kind`, `transcribe` (also `role="transcribe-fast"`), `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed` and `enhance_video`, plus `ask` for the language-model roles (`vision-language`, `text`, and the judges). Each has a result class (`Answer`, `GeneratedImage`, `Embeddings`, `FaceKinds`, `CleanAudio`, `AudioQuality`, `EnhancedVideo` and the four above). The roles `models.toml` lists without a runtime yet (sound-events, speaker-embedding, detect-people, upscale, denoise, nsfw) have none: `run(role, params, app)` reaches them once the service serves them.
+The shortcuts still return the service's JSON, so existing code keeps working, and the result classes keep all of it in `.raw`. There is one shortcut for every role the service runs (`sm.ROLES`): `faces`, `face_kind`, `transcribe` (also `role="transcribe-fast"`), `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed` and `enhance_video`, plus `ask` for the language-model roles (`vision-language`, `text`, and the judges). Each has a result class (`Answer`, `GeneratedImage`, `Embeddings`, `FaceKinds`, `CleanAudio`, `AudioQuality`, `EnhancedVideo` and the four above). In tests, the `fake_models` fixture (section 7) stands in for the service, so the app's tests need neither the service nor a GPU. The roles `models.toml` lists without a runtime yet (sound-events, speaker-embedding, detect-people, upscale, denoise, nsfw) have none: `run(role, params, app)` reaches them once the service serves them.
 
 ### 6. OS helpers
 
-Delete the app's `oslib.py` and import from `strata_python.oslib`: `file_lock(f)`, `pid_alive(pid)`, `kill_tree(pid, sig)`, `lower_priority(nice, io=False)` (`io=True` for idle disk priority too; drop the app's `ionice` helper), `venv_python(venv)` and `cli_command(module)`. `cli_command` now takes the module name (`cli_command("myapp")`). Local `alive(pid)`, `_alive` and `lower_priority()` copies go too. Helpers this library does not have yet (process-group supervision, load average) stay in the app until they move here, and the app's file says so.
+Delete the app's `oslib.py` and import from `strata_python.oslib`: `file_lock(f)`, `pid_alive(pid)`, `kill_tree(pid, sig)`, `lower_priority(nice, io=False)` (`io=True` for idle disk priority too; drop the app's `ionice` helper), `venv_python(venv)` and `cli_command(module)`. `cli_command` now takes the module name (`cli_command("myapp")`). Local `alive(pid)`, `_alive` and `lower_priority()` copies go too. `detached_kwargs()` starts a process outside the server's session and `load_average()` replaces 360's copy. listory's `job_process`, `start_job`, `watch_supervisor`, `terminate_job_group` and `kill_job` are `start_supervised(cmd, env=)`, `watch_supervisor()`, `terminate_own_group()` and `kill_group(proc)`; with the queue's `Worker` an app needs none of them directly.
+
+### 6b. Background work
+
+Replace the app's job dicts and loops with `strata_python.tasks`:
+
+- An in-process run per key ("scan this folder") is `SingleFlight`: `FLIGHTS.start(key, fn)` raises `Conflict` (a 409 with `add_error_handlers`) when that key is running; `fn(flight)` checks `flight.stopping`; `FLIGHTS.get(key).as_json()` is the status. Delete the app's `*_JOBS` dicts, their locks and their stop flags.
+- Work that must outlive a restart is `Detached(cmd, status_path, log)`: `start()`, `read()`, `stop()`. The child writes its own progress and end state with `StatusFile.from_env().update(...)`. Delete the app's `write_status` copies and its pid bookkeeping.
+- A loop every N seconds is `Ticker(every_s, fn, name=...)`. Delete the hand-written `while not stop.wait(...)` threads.
+- Progress from deep inside a task is `report_progress(done, total, text)`; the runner binds a `ProgressReporter` (at most one write a second). Retry rules are `next_state(attempts, error, progressed=...)`: delete the app's own backoff.
+- Jobs that must survive a restart, retry and be listed are the durable queue (with the db extra). Add `JOBS = jobs_table(Base.metadata)` to the models and a revision, then:
+
+```python
+from strata_python.tasks.queue import Job, Queue, Worker
+
+QUEUE = Queue(engine, JOBS, on_fail=cascade)                   # on_fail(conn, job, error), in the failing transaction
+QUEUE.enqueue("ocr", {"page": 3}, domain="book:12", dedupe=True, resources=["gpu"], timeout_s=600)
+WORKER = Worker(QUEUE, {"ocr": ocr_page}, concurrency=2).start()   # a job process per thread, reused; recovers dead workers' jobs
+QUEUE.page(state="running", after=cursor)                      # Page[Task] for GET /api/jobs
+QUEUE.cancel(job_id); QUEUE.retry(job_id); QUEUE.prune(older_than_s=30 * 86400)
+```
+
+  A handler is a module-level `fn(job) -> result` that reads `job.options` and reports progress. By default jobs run in job processes (`python -m strata_python.tasks.child`, one per worker thread, kept between jobs and importing the handlers by name), so a cancel, a timeout or `WORKER.stop()` kills the job and every tool it started, and jobs die with the server; a quick job costs about half a millisecond more than on a thread (3.5 ms against 2.9 ms a job on SQLite), since only a kill starts a new process. `max_jobs=N` replaces a process after N jobs, for code that leaks. The worker checks at start-up that every handler can be imported. `Worker(lower_priority=True)` runs the jobs at idle CPU and disk priority. `Worker(isolate=False)` runs handlers on the server's threads instead, where they return early when `job.stopping`. In tests, `QUEUE.step(handlers)` claims and runs one job in the test's own thread.
 
 ### 7. Tests
 
@@ -229,8 +266,9 @@ What every test gets:
 | `fake_popen` | Code that starts a long-running process: nothing starts; `fake_popen.instances[-1].cmd` and `.kw`; set `.returncode = 0` to finish it |
 | `fake_run` | Code that runs a program: `fake_run.returns["ffprobe"] = b"..."`, `fake_run.code = 1`, then `fake_run.calls` |
 | `no_sleep` | Retries and backoff without waiting: `no_sleep.delays` |
+| `fake_models` | An app that calls strata-models: a stand-in service on a real port with `STRATA_MODELS_URL` set, so `strata_python.clients.models` runs unchanged. `fake_models.results["ocr"] = {...}` (or a function of the params), `.fail("CUDA out of memory", role="faces")`, `.busy = True` (leases wait), `.down = True` (503s), then `.jobs[0]["params"]` |
 
-`strata_python.testing` holds the classes behind them (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) for a test that needs one directly. Prefer the real thing: `http_server` over `fake_urlopen`, the actual program over `fake_run`. A fake is for a true external edge where speed matters.
+`strata_python.testing` holds the classes behind them (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`, `FakeModels` and its example replies `MODELS_RESULTS`) for a test that needs one directly. Prefer the real thing: `http_server` over `fake_urlopen`, the actual program over `fake_run`. A fake is for a true external edge where speed matters.
 
 ### 8. Database (apps with one)
 

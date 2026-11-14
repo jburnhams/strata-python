@@ -15,6 +15,8 @@ Testing policy).
   FakeRun          `subprocess.run` / `check_output`; `.returns` maps a command-line substring to stdout, `.code` fails
   Sleeper          `time.sleep` that returns at once and records `.delays`
   run_cli          an argparse `main(argv)` in this process -> CliResult; run_module the same as a real `python -m`
+  FakeModels       a stand-in strata-models service (jobs, leases, registry) for `strata_python.clients.models`; served
+                   by the `fake_models` fixture. MODELS_RESULTS holds one reply per role in the service's shapes.
 """
 
 from __future__ import annotations
@@ -255,3 +257,165 @@ def run_module(
     if check and p.returncode:
         raise AssertionError(f"python -m {module} exited {p.returncode}:\n{result.out}")
     return result
+
+
+# --- a stand-in strata-models ---------------------------------------------------------------------------------------
+
+Json = dict[str, Any]
+Result = Json | Callable[[Json], Json]
+
+MODELS_RESULTS: dict[str, Json] = {
+    "ocr": {
+        "width": 1200, "height": 1800, "text": "CHAPTER I\nIt was a dark night.",
+        "lines": [
+            {"text": "CHAPTER I", "box": [100, 80, 300, 40], "conf": 96.5, "block": 1,
+             "words": [{"text": "CHAPTER", "box": [100, 80, 200, 40], "conf": 97.0}, {"text": "I", "box": [320, 80, 20, 40], "conf": 96.0}]},
+            {"text": "It was a dark night.", "box": [100, 160, 600, 30], "conf": 91.2, "block": 2, "words": []},
+        ],
+        "engine": "tesseract 5.5", "lang": "eng", "psm": 3, "clean": [], "seconds": 1.2, "model": "tesseract", "pdf": "/out/p.pdf",
+    },
+    "transcribe": {
+        "language": "en", "language_probability": 0.99, "duration": 3.5,
+        "segments": [{"start": 0.0, "end": 1.5, "text": " Hello", "avg_logprob": -0.2, "no_speech_prob": 0.01,
+                      "words": [{"start": 0.0, "end": 1.5, "word": " Hello", "probability": 0.9}]},
+                     {"start": 1.5, "end": 3.5, "text": " world.", "avg_logprob": -0.3, "no_speech_prob": 0.02}],
+    },
+    "faces": {"width": 640, "height": 480, "faces": [{"bbox": [1, 2, 30, 40], "kps": [[5, 6]] * 5, "det_score": 0.87, "embedding": [0.1] * 4, "pose": [1, 2, 3]}, {"bbox": [9, 9, 20, 20]}]},
+    "speak": {"path": "/out/s.wav", "duration_s": 2.5, "sample_rate": 24000, "seconds": 0.8, "engine": "kokoro", "voice": "af_heart", "seed": 1, "speech_s": 2.1},
+    "vision-language": {"text": '{"scene": "beach"}', "json": {"scene": "beach"}, "tokens_in": 812, "tokens_out": 9, "seconds": 1.4, "model": "qwen3.5-9b-vl", "peak_vram_mb": 7100},
+    "image-generate": {"path": "/out/g.png", "width": 1024, "height": 768, "seed": 1234, "steps": 4, "seconds": 9.5, "peak_vram_mb": 9000, "model": "flux3-klein"},
+    "image-embed": {"images": [[0.6, 0.8]], "texts": [[1.0, 0.0], [0.0, 1.0]], "dim": 2},
+    "face-kind": {"faces": [{"real": True, "kind": "person", "probs": {"person": 0.97, "statue": 0.03}}, {"real": False, "kind": "statue", "probs": {}}], "head": "trained head.npz"},
+    "denoise-audio": {"path": "/out/c.wav", "duration_s": 4.0, "sample_rate": 48000, "seconds": 0.7, "engine": "dfn3", "model": "deepfilternet3", "lufs_in": -31.2, "lufs_out": -14.0, "removed_db": 6.5},
+    "audio-quality": {"dnsmos": {"sig": 3.4, "bak": 3.9, "ovrl": 3.0}, "squim": {"stoi": 0.93, "pesq": 2.8, "si_sdr": 14.2}, "duration_s": 4.0},
+    "video-enhance": {
+        "path": "/out/v.mp4", "width": 1440, "height": 1080, "fps": 50.0, "frames": 400, "seconds": 61.0, "engine": "ffmpeg", "model": "video-lanczos",
+        "crops": [{"id": "face", "label": "Gran", "box": [100, 50, 80, 80], "path": "/out/v-face.mp4", "stills": ["/out/v-face-3.png"]}],
+        "stills": ["/out/v-1.png"], "enhance_s": 40.0, "quality": {"ssim": 0.91, "skipped": "no numpy"},
+    },
+}  # fmt: skip
+"""One reply per role in the service's own shapes (taken from its runtimes), so `Shape.from_json` reads each one."""
+for _role in ("transcribe-fast",):
+    MODELS_RESULTS[_role] = MODELS_RESULTS["transcribe"]
+for _role in ("text", "judge-text", "judge-vision", "judge-audio"):
+    MODELS_RESULTS[_role] = MODELS_RESULTS["vision-language"]
+
+
+class FakeModels:
+    """A stand-in strata-models service for an app's tests, over real HTTP: the `fake_models` fixture serves `.app` on
+    a loopback port and points `STRATA_MODELS_URL` at it, so the app's own calls through `strata_python.clients.models`
+    run unchanged. The job and lease endpoints follow the service's steps (queued, running, then done or failed;
+    long-poll `?wait=` is accepted and answered at once), so a test sees what the app does with each outcome.
+
+        fake_models.results["ocr"] = {...}            # or a function of the job's params
+        fake_models.fail("CUDA out of memory")        # the next job fails (fail(..., role="faces"): the next faces job)
+        fake_models.busy = True                       # leases stay queued: the GPU is someone else's
+        fake_models.down = True                       # every request is a 503
+        assert fake_models.jobs[0]["params"]["lang"] == "eng"
+
+    `running_polls` is how many polls a job answers `running` before it finishes (default 1, as the real service
+    usually is when the first poll arrives). A role with no result is refused with a 422, as the service refuses a role
+    it does not know. The registry answers each role's model from `.models` (role -> model name)."""
+
+    def __init__(self, results: Mapping[str, Result] | None = None, *, running_polls: int = 1) -> None:
+        from fastapi import FastAPI, HTTPException, Request  # here, so importing the fakes does not load FastAPI
+
+        self.results: dict[str, Result] = dict(MODELS_RESULTS if results is None else results)
+        self.models: dict[str, str] = {}
+        self.running_polls = running_polls
+        self.jobs: list[Json] = []  # every job submitted, in order, as the service stored it
+        self.leases: list[Json] = []
+        self.heartbeats: list[int] = []
+        self.released: list[int] = []
+        self.busy = False
+        self.refuse = False  # a lease request ends at once, without the GPU
+        self.down = False
+        self._failures: list[tuple[str | None, str]] = []
+        self._polls: dict[int, int] = {}
+        app = FastAPI()
+        self.app = app
+
+        @app.middleware("http")
+        async def unavailable(request: Request, call_next: Callable[[Request], Any]) -> Any:  # pyright: ignore[reportUnusedFunction]
+            if self.down:
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse({"detail": "starting"}, status_code=503)
+            return await call_next(request)
+
+        @app.get("/api/health")
+        def health() -> Json:  # pyright: ignore[reportUnusedFunction]
+            return {"ok": True, "version": "0-fake", "gpu": None}
+
+        @app.get("/api/registry")
+        def registry() -> Json:  # pyright: ignore[reportUnusedFunction]
+            return {"roles": [{"key": r, "model": self.models.get(r, f"fake-{r}")} for r in self.results]}
+
+        @app.post("/api/jobs")
+        def submit(body: Json) -> Json:  # pyright: ignore[reportUnusedFunction]
+            role = str(body.get("role"))
+            if role not in self.results:
+                raise HTTPException(422, f"unknown role {role!r}")
+            job: Json = {**body, "id": len(self.jobs) + 1, "status": "queued", "result": None, "error": None}
+            self.jobs.append(job)
+            return dict(job)
+
+        @app.get("/api/jobs/{job_id}")
+        def poll(job_id: int, wait: float = 0) -> Json:  # pyright: ignore[reportUnusedFunction]
+            job = self._job(job_id, HTTPException)
+            if job["status"] in ("queued", "running"):
+                n = self._polls[job_id] = self._polls.get(job_id, 0) + 1
+                if n <= self.running_polls:
+                    job["status"] = "running"
+                else:
+                    self._finish(job)
+            return dict(job)
+
+        @app.post("/api/leases")
+        def lease(body: Json) -> Json:  # pyright: ignore[reportUnusedFunction]
+            row: Json = {**body, "id": len(self.leases) + 1, "status": "cancelled" if self.refuse else "queued"}
+            self.leases.append(row)
+            return dict(row)
+
+        @app.get("/api/leases/{lease_id}")
+        def lease_poll(lease_id: int, wait: float = 0) -> Json:  # pyright: ignore[reportUnusedFunction]
+            row = self._lease(lease_id, HTTPException)
+            if row["status"] == "queued" and not self.busy:
+                row["status"] = "running"
+            return dict(row)
+
+        @app.post("/api/leases/{lease_id}/heartbeat")
+        def beat(lease_id: int) -> Json:  # pyright: ignore[reportUnusedFunction]
+            self._lease(lease_id, HTTPException)
+            self.heartbeats.append(lease_id)
+            return {"ok": True}
+
+        @app.delete("/api/leases/{lease_id}")
+        def release(lease_id: int) -> Json:  # pyright: ignore[reportUnusedFunction]
+            self._lease(lease_id, HTTPException)["status"] = "done"
+            self.released.append(lease_id)
+            return {"ok": True}
+
+    def fail(self, error: str = "the model failed", *, role: str | None = None) -> FakeModels:
+        """The next job (of `role`, when given) fails with `error`. Calls queue up: each failure is used once."""
+        self._failures.append((role, error))
+        return self
+
+    def _finish(self, job: Json) -> None:
+        for i, (role, error) in enumerate(self._failures):
+            if role is None or role == job["role"]:
+                del self._failures[i]
+                job.update(status="failed", error=error)
+                return
+        result = self.results[job["role"]]
+        job.update(status="done", result=result(dict(job["params"] or {})) if callable(result) else result)
+
+    def _job(self, job_id: int, error: Callable[[int, str], Exception]) -> Json:
+        if not 1 <= job_id <= len(self.jobs):
+            raise error(404, f"no job {job_id}")
+        return self.jobs[job_id - 1]
+
+    def _lease(self, lease_id: int, error: Callable[[int, str], Exception]) -> Json:
+        if not 1 <= lease_id <= len(self.leases):
+            raise error(404, f"no lease {lease_id}")
+        return self.leases[lease_id - 1]

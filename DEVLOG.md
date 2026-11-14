@@ -4,6 +4,71 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**Every queue job in a supervised process, from a pool that is reused: listory's supervisor in `oslib` and `tasks.child` (branch `claude/project-thread-aefumh`)**
+
+Jonathan asked whether listory's process-group supervisor applied to every job. It does: a thread can only be asked to stop, so the queue's cancel and timeout were cooperative and a handler that never checked `job.stopping` ran to the end. The first version started a new interpreter per job, as listory does, which cost about 0.3 s a job. He asked for processes to be reused, like a thread pool, so quick jobs stay cheap. Each worker thread now keeps one job process that runs job after job. Measured on SQLite over 300 trivial jobs: 3.5 ms a job in job processes, against 2.9 ms on threads. Only a kill starts a new process.
+
+- `src/strata_python/oslib.py`: `start_supervised`, `watch_supervisor`, `terminate_own_group`, `kill_group`, from listory's `job_process`, `start_job`, `watch_supervisor`, `terminate_job_group` and `kill_job`. The child is started in its own session (a new process group on Windows) with a pipe on stdin that the parent never writes to. `watch_supervisor` reads it until EOF and then kills the group, so a parent that crashes takes its jobs with it. It pops `STRATA_SUPERVISED` so the job's own children do not think they are supervised.
+- `src/strata_python/tasks/child.py` **new**: the job process and `JobProcess`, the parent's end of it. The process imports handlers by `module:qualname` (cached), connects once with the same URL (passed in the environment, not argv, because it can hold a password), and reads one job a line on stdin, answering a line each on its original stdout. Its fd 1 is pointed at stderr, so prints and tools' output go to the log and not into the answers. A thread reads stdin, so the parent closing it (or dying) kills the group even mid-job. Before running an attempt it checks the claim token and skips a replaced one. Errors cross the process boundary as a type name, their builtin base class and a message. The parent rebuilds them so `next_state` treats them as it would in-process: a `TypeError` still fails at once, a `RetryLater` keeps its pause, and `KeyError('x')` still reads `KeyError: 'x'`. `JobProcess` starts the process when its thread starts, reuses it, kills it on cancel, timeout or stop, and replaces it on the next job, or after `max_jobs`.
+- `src/strata_python/tasks/queue.py`: `Worker(isolate=True, lower_priority=False, max_jobs=None)`, with one `JobProcess` per thread (`worker.slots`). `_run_isolated` sends the job and waits for the answer while it watches the cancel flag, the timeout and the stop event. It records cancelled, `TimeoutError`, released, `WorkerLost` (the process died without answering) or the process's own result or error. Handlers are checked at construction, so a lambda fails at start-up instead of on the first job.
+- `src/strata_python/oslib.py`: `start_supervised(..., text=True)` also pipes stdout, as text, for the answers.
+- Windows CI caught a hang: a tool the handler starts inherits the job process's real stdout handle on Windows, because `dup2` on fd 1 does not move the Win32 handle. Its output reached the answer pipe, the parent could not parse it, and the worker thread died. Answers now start with a marker (`child.MARK`), and any other line on the pipe goes to the log (`child.route`). A worker thread that hits its own error now fails that job, replaces its process and carries on.
+- The next Windows run still hung on that job, which waits on a tool from inside the job process. `oslib.stdout_to_stderr()` **new** now also moves the Win32 standard output handle (`SetStdHandle`), so the tools a handler starts write to the log on Windows too. The test's tool call has a timeout, so a hang shows up as the job's error rather than a stuck wait. Its own test checks that what the process and a tool print reaches stderr and only the answer reaches stdout. The Windows behaviour is still unconfirmed until CI runs it.
+- **Correction:** that was not the cause. With the timeout in place, CI showed the tool itself never exiting on Windows. The job loop's thread blocks reading the command pipe on stdin, a synchronous pipe serialises I/O, and the tool inherited that pipe as its stdin and blocked starting up. `oslib.stdin_from_devnull()` **new** moves the commands to a private fd and gives fd 0 (and the Win32 standard input handle) to the null device, so tools get an empty stdin. The oslib test now holds a thread blocked on the pipe while a tool runs and reads its stdin.
+- `tests/unit/job_handlers.py` **new** (module-level handlers a process can import). `tests/unit/test_queue.py`: one worker running seven kinds of outcome; cancel, timeout and stop each killing the job and the tool it started (pids checked); 40 jobs in one process under 0.25 s a job, a printing handler leaving the protocol intact, and a cancel replacing the process; `max_jobs`; handlers that cannot be imported refused; the job loop run in-process for coverage, including a replaced attempt; rebuilt errors. The existing thread-worker test now passes `isolate=False`. `tests/unit/test_oslib.py`: closing the lifeline kills the child and its tool.
+- README (oslib row, migration note, the queue section), AGENTS.md layout, CHANGELOG.
+
+**Queue and `Detached` fixes from the review of PR #25 (branch `claude/project-thread-aefumh`)**
+
+The Codex review of PR #25 found four real races; each fix has a test that fails without it.
+
+- `src/strata_python/tasks/queue.py`: a `claim_token` column, new per claim; heartbeat, report, finish, fail and release update only the row with this attempt's token, so a worker whose job was recovered and claimed again writes nothing over the new attempt (and `on_fail` does not run for it), and its heartbeat tells it to stop. `claim` reads candidates `batch` (200) at a time and goes on past the batch, keyed on (priority, id), so jobs waiting for a held resource no longer hide the rest. On SQLite the claim starts with a write that changes nothing, which takes the database's write lock, so another process or `Queue` waits before reading which resources are held (the earlier entry's "two workers cannot start two jobs that share a resource" held only within one `Queue` on SQLite).
+- `src/strata_python/tasks/status.py`: `StatusFile.locked()` (`<path>.lock`, `oslib.file_lock`); `write` and `update` hold it, and `Detached.start` holds it from before the child exists until its "running" is written, so a child that finishes at once is no longer written over and then read as died.
+- `tests/unit/test_queue.py`: blocked jobs beyond a batch, a second `Queue` waiting on a claim in progress (both backends), a recovered attempt that cannot touch its replacement. `tests/unit/test_tasks.py`: a child that finishes at once, an update in another process waiting for the lock.
+
+**A durable job queue: `strata_python.tasks.queue` (branch `claude/project-thread-aefumh`)**
+
+The plan's last step before the later modules: one queue for the seven job systems. It follows the survey's design: listory's schema and claim loop on SQLAlchemy Core, the strata-models store's style (injectable clock, conditional-UPDATE claim, cursor paging, `recover`, `prune`, `step`), and `tasks.retry`. The first adopter the plan names is strata-scan, with listory replacing its own queue as the proof; neither has moved yet.
+
+- `src/strata_python/tasks/queue.py` **new**: `jobs_table`, `Job`, `Queue`, `Worker`, `WorkerLost`, `JobCancelled`, `dedupe_key`. Times are float epochs in the table so both backends store them the same; `Task` turns them into aware datetimes. Claims hold a lock in the process and, on Postgres, `pg_advisory_xact_lock`, so two workers cannot start two jobs that share a resource. Cancel and timeout are cooperative (`job.stopping`): killing a thread is not possible, and work that must be killable is a `Detached` process. Subprocess isolation per job, which listory has, is not here yet.
+- The method that lists jobs is `page`, not `list`: inside the class `list` would shadow the builtin in its own annotations (ty refuses `list[str]` there).
+- `tests/unit/test_queue.py` **new**: every case on a SQLite file and on the throwaway Postgres: paging, priority and delay, dedupe, resources, backoff then failure with `on_fail`, `RetryLater` and progress resetting the count, cancel (queued, running, raising), recovery of a dead pid and of a stale heartbeat (another host's job only when stale), prune, and real worker threads with a timeout and a shutdown that releases its job.
+- `README.md` (module table, step 6b), `CHANGELOG.md`.
+
+
+**Contracts, a service client base, web extras and the task primitives (branch `claude/project-thread-aefumh`)**
+
+The owner asked for the rest of the library work in the move-out plan while the apps move onto 0.2.x. These are its steps 3 to 5 (web extras, contracts and `ServiceClient`, task primitives), designed from the survey's notes on each app's copy. The models client stays standard library only and keeps its own calls (decided earlier today); only its `Unavailable` now subclasses the shared one, so `add_error_handlers` answers it as 503.
+
+- `src/strata_python/contracts.py` **new**: `Health`, `SystemInfo`, `Folder`, `ServiceStatus`, `ErrorBody`, `Task`, `TaskState`, `FINISHED`, `Progress`, `Page[T]` (written with `Generic[T]`, since 3.11 is supported), `FileRef`, `Judgment`, `utc`.
+- `src/strata_python/client.py` **new**: `ServiceClient`, `Rejected`, `Unavailable`, `env_url`. Only idempotent methods retry, because a retried POST can submit a job twice.
+- `src/strata_python/web.py`: `add_error_handlers` and `DEFAULT_ERRORS`, `add_system`, `source_commit`, `base_app(commit=)`, and the settings routes declare `Settings.model()` as their response. The PUT body stays an untyped dict on purpose: a typed body would answer an unknown key with 422 instead of the 400 apps and their tests expect.
+- `src/strata_python/settings.py`: `Settings.model()` (pydantic imported inside it, so the CLI's settings reads stay light).
+- `src/strata_python/tasks/` **new**: `retry.py` (after strata-360's `pipeline/retry.py` as the survey describes it: programming errors fail at once, progress resets the count, `RetryLater` names its pause), `progress.py`, `flight.py` (`SingleFlight`, `Flight`, `Conflict`), `status.py` (`StatusFile`, `Detached`, `write_json_atomic`; `Detached` reaps its own exited child, since a zombie still passes `pid_alive`), `ticker.py`, `__init__.py`.
+- `src/strata_python/oslib.py`: `detached_kwargs`, `load_average`. listory's process-group supervisor is not here yet: its code was not read in this pass.
+- `src/strata_python/clients/models.py`: `Unavailable` subclasses `client.Unavailable`.
+- `tests/unit/test_contracts.py`, `tests/unit/test_client.py`, `tests/unit/test_tasks.py` **new**; `tests/unit/test_web.py` (error bodies, `/api/system` with a real service up, one down and one not ok, `source_commit` on a made-up checkout and worktree, the settings schema in OpenAPI), `tests/unit/test_oslib.py` (`detached_kwargs` and `load_average` checked on each platform: a new session on POSIX, a detached child that still runs and no load average on Windows, which the first CI run caught). All over real HTTP, real threads, real files and real child processes.
+- `README.md` (module table, step 4, step 6, new step 6b), `AGENTS.md` (layout), `src/strata_python/__init__.py`, `CHANGELOG.md`.
+
+
+**A stand-in strata-models for the apps' tests (branch `claude/project-thread-aefumh`)**
+
+The move-out plan's next step for the models client: every app that calls strata-models would otherwise write its own fake service or mock the client. The stand-in that tested the client here becomes public, so apps test their own calls against the same service steps over real HTTP.
+
+- `src/strata_python/testing.py`: `FakeModels` (FastAPI, imported inside the constructor so importing the fakes stays light) with the job, lease, heartbeat, release, registry and health endpoints, scripted results and failures, `busy`, `refuse` and `down`; `MODELS_RESULTS`, the example replies that were in the test, with output paths under `/out/` (ruff's S108 refuses `/tmp` in `src`).
+- `src/strata_python/pytest_plugin.py`: the `fake_models` fixture (served by `live_server`, `STRATA_MODELS_URL` set).
+- `tests/unit/test_clients_models.py`: uses the fixture instead of its own `Service` class. `tests/unit/test_testing.py`: scripted results, a failure for one role, a missing job and lease, an unknown role, an outage, `running_polls=0`.
+- `README.md` (module table, step 5b, fixture table), `CHANGELOG.md`.
+
+
+**Pillow 13 as the `[pdf]` extra's floor (branch `claude/project-thread-aefumh`)**
+
+The audit job failed on main after `strata_python.pages` landed: the lock held Pillow 12.3.0, which has eight advisories fixed in 13.0.0. Dependabot's PR #23 raised the cap and the lock; this raises the floor too, so an app that installs `[pdf]` cannot resolve to a vulnerable Pillow either.
+
+- `pyproject.toml`: `pillow>=13,<14`. `uv.lock`.
+- `CHANGELOG.md`.
+
+
 **The strata-models client moves in as `strata_python.clients.models` (issue #18; branch `claude/project-thread-vzy9v6`)**
 
 Apps installed strata-models' client from a path or a git URL into their own venvs. The library rules say a strata service's client belongs here. The owner chose standard library and dataclasses for it, with no pydantic and no `[models]` extra, because the client is called from code and does not validate requests. That replaces the morning's note about `strata_python.services.models` on pydantic.
