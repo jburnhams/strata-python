@@ -6,6 +6,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ### Added
 
+- `strata_python.clients.models`: the strata-models client, standard library only, with the same functions as `strata_models_client` (`run`, `submit`, `wait`, `wait_job`, `faces`, `transcribe`, `ocr`, `speak`, `role_model`, `acquire`, `gpu_lease`, `Unavailable`, `JobFailed`), now typed, plus result shapes `OcrPage`, `Transcript`, `Faces` and `Speech` (`.from_json`, with everything the service sent in `.raw`). To move: replace `import strata_models_client as sm` with `from strata_python.clients import models as sm` and drop the client's path or git dependency.
+
 - Typed settings: normalisers `number_between(lo, hi)`, `whole_between(lo, hi)`, `iso_date(allow_blank=True)` and `boolean`, and getters `get_int`, `get_float`, `get_bool`. Replace an app's own range and date normalisers and its `int(SETTINGS.get(...))` calls.
 - `ListSetting(key, default=..., item=..., sep=os.pathsep, env=...)`: a list of strings, a JSON list in the file, split on `sep` in the environment, read with `get_list`. `all()`, `GET /api/settings` and `PUT /api/settings` carry it as a JSON list, and `set` shows and takes it joined. An app with a list of folders can now drop its own settings file handling.
 - Settings stores: `Settings(..., store=...)` and `Settings.bind(store)` keep the values in any object with `load()` and `update(changes)`. On the first bind the JSON file's values are copied in once. `strata_python.db.settings` has the table every app shares (`settings_table(Base.metadata)`) and its `TableStore`, on SQLite and Postgres.

@@ -4,6 +4,16 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**The strata-models client moves in as `strata_python.clients.models` (issue #18; branch `claude/project-thread-vzy9v6`)**
+
+Apps installed strata-models' client from a path or a git URL into their own venvs. The library rules say a strata service's client belongs here. The owner chose standard library and dataclasses for it, with no pydantic and no `[models]` extra, because the client is called from code and does not validate requests. That replaces the morning's note about `strata_python.services.models` on pydantic.
+
+- `src/strata_python/clients/__init__.py`, `src/strata_python/clients/models.py` **new**: the client's code as it is in strata-models' `client/` (same names, defaults, long-poll and lease steps), fully annotated, with typed result shapes for the roles apps call today: `ocr`, `transcribe`, `faces` and `speak`, read from the service's runtimes (`runtimes/tesseract.py`, `workers/whisper.py`, `runtimes/faces.py`, `workers/tts.py`). The shortcuts still return the JSON, so a move is one import line, and each shape keeps the whole reply in `raw`. The issue also named `image-describe`, `font-match` and `page-build`, but the service has no `image-describe` role (that is `vision-language`) and the other two do not exist yet, so they are left until it serves them.
+- `tests/unit/test_clients_models.py` **new**: a stand-in service in FastAPI over real HTTP (`live_app`), covering the shortcuts' requests, the typed shapes, a failed job, a refused request, a 503, no service, a wait that times out, a lease with heartbeats and release, a queued lease withdrawn after its timeout, and `gpu_lease` with no service.
+- `README.md` (module table, step 5b), `AGENTS.md` (layout), `CHANGELOG.md`.
+- Left for strata-models: test the client against its real API in its integration suite, then delete `client/`.
+
+
 **Settings: typed values, lists and a pluggable store (issues #10, #16; branch `claude/project-thread-vzy9v6`)**
 
 strata-stills could not adopt `Settings` because two of its settings are lists, and strata-models because its settings move into a database table and it has numbers, ranges and dates. Both kept a copy of `settings.py`. Typed int, float and bool settings were left as normalisers plus getters, not new kinds. The values stay canonical strings, so the file is still hand-editable and every existing app reads the same. Only lists needed a new kind.

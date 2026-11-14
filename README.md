@@ -8,6 +8,7 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 | `strata_python.settings` | `Settings` / `Setting` / `ListSetting`: one JSON file in `~/.<app>` with `<APP>_*` environment overrides, validation (`absolute_path`, `non_empty`, `number_between`, `whole_between`, `iso_date`, `boolean`), typed getters, atomic saves, and `bind(store)` to keep them elsewhere (`strata_python.db.settings.TableStore`) |
 | `strata_python.web` | `base_app` (health with the app's own fields + settings routes), `add_web` (built web app or stand-in page at every non-API path), `with_base` (reverse-proxy-safe `<base href>`), `static_file` (path-safe), `serve` |
 | `strata_python.cli` | `add_doctor` (imports, labels, optional modules and the app's own `Check`s), `add_set`, `add_serve` for the app's argparse subcommands |
+| `strata_python.clients.models` | The strata-models client, standard library only: `run`, `submit`, `wait`, `faces`, `transcribe`, `ocr`, `speak`, `role_model`, `gpu_lease`, and typed results (`OcrPage`, `Transcript`, `Faces`, `Speech`) |
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
 | pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, and the `integration` marker on everything under `tests/integration` |
 | `strata_python.testing` | The fakes behind those fixtures (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) and the CLI runners `run_cli(main, *args)` and `run_module("myapp", *args, src=...)` |
@@ -151,6 +152,21 @@ cli.add_doctor(
 ```
 
 A check returns `(status, text)` with status `ok`, `missing`, `slow` (works, but not as it should; never fails) or `broken`, and an exception counts as `broken`. Doctor exits 1 when a required module or check is missing or broken. A check that may be missing without that being a fault is `Check(..., optional=True)`.
+
+### 5b. The strata-models client (apps that use the model service)
+
+Drop the `strata-models-client` path or git dependency and change the import. The functions, their arguments and the exceptions are the same:
+
+```python
+from strata_python.clients import models as sm   # was: import strata_models_client as sm
+
+page = sm.OcrPage.from_json(sm.ocr("/path/page.png", app="strata-scan"))   # typed: page.lines[0].words[0].box
+talk = sm.Transcript.from_json(sm.transcribe("/path/talk.wav", app="strata-360"))
+with sm.gpu_lease("strata-stills", vram_gb=4):
+    run_my_own_cuda_code()
+```
+
+The shortcuts still return the service's JSON, so existing code keeps working, and the result classes keep all of it in `.raw`.
 
 ### 6. OS helpers
 
