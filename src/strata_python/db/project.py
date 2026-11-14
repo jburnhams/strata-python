@@ -26,6 +26,20 @@ if TYPE_CHECKING:
 TABLE = "strata-db"
 
 
+def find_table(start: str | os.PathLike[str] | None = None) -> tuple[Path, dict[str, Any]] | None:
+    """The nearest pyproject.toml with [tool.strata-db], from start (default: cwd) upwards: its folder and the table.
+    Standard library only, so the pytest plugin can ask without loading SQLAlchemy."""
+    p = Path(start or os.getcwd()).resolve()
+    for d in [p, *p.parents] if p.is_dir() else [p.parent, *p.parent.parents]:
+        f = d / "pyproject.toml"
+        if not f.is_file():
+            continue
+        cfg = cast("dict[str, Any]", tomllib.loads(f.read_text(encoding="utf-8")).get("tool", {})).get(TABLE)
+        if cfg:
+            return d, cast("dict[str, Any]", cfg)
+    return None
+
+
 @dataclass
 class Project:
     root: Path
@@ -41,22 +55,21 @@ class Project:
     @classmethod
     def load(cls, start: str | os.PathLike[str] | None = None) -> Project:
         """Find the nearest pyproject.toml with [tool.strata-db], from start (default: cwd) upwards."""
-        p = Path(start or os.getcwd()).resolve()
-        for d in [p, *p.parents] if p.is_dir() else [p.parent, *p.parent.parents]:
-            f = d / "pyproject.toml"
-            if not f.is_file():
-                continue
-            cfg = cast("dict[str, Any]", tomllib.loads(f.read_text(encoding="utf-8")).get("tool", {})).get(TABLE)
-            if cfg:
-                return cls(
-                    root=d,
-                    app=cfg["app"],
-                    models=cfg["models"],
-                    migrations_dir=(d / cfg.get("migrations", "migrations")).resolve(),
-                    engine=cfg.get("engine", "portable"),
-                    schema=cfg.get("schema", cfg["app"]),
-                )
-        raise FileNotFoundError(f"no pyproject.toml with [tool.{TABLE}] in {p} or above (strata-db init writes one)")
+        found = find_table(start)
+        if found is None:
+            p = Path(start or os.getcwd()).resolve()
+            raise FileNotFoundError(
+                f"no pyproject.toml with [tool.{TABLE}] in {p} or above (strata-db init writes one)"
+            )
+        d, cfg = found
+        return cls(
+            root=d,
+            app=cfg["app"],
+            models=cfg["models"],
+            migrations_dir=(d / cfg.get("migrations", "migrations")).resolve(),
+            engine=cfg.get("engine", "portable"),
+            schema=cfg.get("schema", cfg["app"]),
+        )
 
     @property
     def metadata(self) -> MetaData:

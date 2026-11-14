@@ -73,17 +73,17 @@ Replace the app's `settings.py` (its key list, getters, file handling and enviro
 from strata_python.settings import Setting, Settings, absolute_path, non_empty
 
 SETTINGS = Settings(
-    "myapp",                                   # ~/.myapp/settings.json, moved with MYAPP_HOME
+    "myapp",  # ~/.myapp/settings.json, moved with MYAPP_HOME
     [
         Setting("data_dir", default=lambda: "/srv/myapp", normalise=absolute_path),
         Setting("greeting", default="Hello", normalise=non_empty),
     ],
-    prefix="MYAPP",                            # only if the app already runs with other variable names
+    prefix="MYAPP",  # only if the app already runs with other variable names
 )
 
-SETTINGS.get("greeting")           # MYAPP_GREETING, else the file, else the default
+SETTINGS.get("greeting")  # MYAPP_GREETING, else the file, else the default
 SETTINGS.save({"greeting": "Hi"})  # validated and written atomically; None resets to the default
-SETTINGS.folder("data_dir")        # the value as a folder, created if missing
+SETTINGS.folder("data_dir")  # the value as a folder, created if missing
 ```
 
 Values are strings today. An app with int, float or list settings converts at the point of use (`int(SETTINGS.get("workers"))`, `SETTINGS.get("roots").split(os.pathsep)`) until typed settings land here.
@@ -115,8 +115,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="myapp")
     sub = parser.add_subparsers(dest="cmd", required=True)
     cli.add_doctor(sub, "myapp", __version__, ("fastapi", "uvicorn"))  # versions, and whether each import works
-    cli.add_set(sub, SETTINGS)                                          # myapp set KEY [VALUE|default]
-    cli.add_serve(sub, lambda host, port: web.serve(create_app(), ["--host", host, "--port", str(port)]), default_port=8000)
+    cli.add_set(sub, SETTINGS)  # myapp set KEY [VALUE|default]
+    cli.add_serve(
+        sub, lambda host, port: web.serve(create_app(), ["--host", host, "--port", str(port)]), default_port=8000
+    )
     # ... the app's own subcommands, each with set_defaults(fn=...) ...
     args = parser.parse_args(argv)
     return args.fn(args)
@@ -206,7 +208,7 @@ migrations = "migrations"        # the app's Alembic revisions, unchanged
 - Environment: `STRATA_DB_LIVE=1` in the service unit (next to the old variable until every app has moved), and `STRATA_DB_DATABASE` naming the shared database. It has no built-in name any more, because that name is the owner's and this package is public; set it once where the services get their environment. `STRATA_DB_URL` and `<APP>_DATABASE_URL` work as before. Tests and CI: `STRATA_DB_TEST_ADMIN_URL`, `STRATA_DB_TEST=postgres`.
 - Commands: `strata-db revision -m "..."`, `strata-db check`, `strata-db migrate --live`, `strata-db current --live`, `strata-db new-app`, `strata-db init` (or `python -m strata_python.db`).
 - At service start (only there): `Project.load(__file__).upgrade(connect("myapp"))`.
-- Tests: the plugin is registered with every install and does nothing until the extra is there. Then `db_session`, `db_engine`, `db_url` (a URL for code that builds its own engine), `db_env` (points the app's own `connect("myapp")` at the test database; make it autouse in `conftest.py` for an app that connects by itself), `db_backend`, `db_project`. Migrations run once into a template and each test gets a copy, so a test costs a file copy. `pytest --pg` runs the same tests on a private Postgres the run starts for itself (needs the PostgreSQL server binaries), or on `STRATA_DB_TEST_ADMIN_URL`. Add the standard tests once:
+- Tests: the plugin is registered with every install and does nothing until the extra is installed and the project has `[tool.strata-db]` (or `strata_db = true` in `[tool.pytest.ini_options]`; `strata_db = false` turns it off). So an app can take a 0.2.x release before it moves its database, even with the old database package still installed. Then `db_session`, `db_engine`, `db_url` (a URL for code that builds its own engine), `db_env` (points the app's own `connect("myapp")` at the test database; make it autouse in `conftest.py` for an app that connects by itself), `db_backend`, `db_project`. Migrations run once into a template and each test gets a copy, so a test costs a file copy. `pytest --pg` (or `--strata-pg`, which no other plugin can take) runs the same tests on a private Postgres the run starts for itself (needs the PostgreSQL server binaries), or on `STRATA_DB_TEST_ADMIN_URL`. Add the standard tests once:
 
   ```python
   # tests/unit/test_database.py

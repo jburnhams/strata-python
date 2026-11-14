@@ -4,6 +4,17 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**The db pytest plugin switches on only for apps that use it, and its `--pg` no longer clashes (issues #11, #19; branch `claude/project-thread-vzy9v6`)**
+
+Two apps reported that with 0.2.1 installed pytest would not start when the old database package was installed too: both plugins add `--pg`, and a second `addoption` for a name raises. The plugin also switched its guard on whenever SQLAlchemy and Alembic were importable, which refuses the old package's throwaway databases in the same run. So an app could not take 0.2.x first and move its database later, the order README step 8 suggests.
+
+- `src/strata_python/db/pytest_plugin.py`: "on" now means the extra is installed and the project asks (`[tool.strata-db]` from the rootdir up, or the new `strata_db` ini option, which wins either way). The guard starts in `pytest_load_initial_conftests` (still before conftest.py and the app's modules; `pytest_configure` when the plugin is loaded from a conftest.py, as here) instead of at import. `pytest_addoption` adds only names of our own (`--strata-pg`, the ini option); `--pg` is added once on, after every entry-point plugin has added its options, and a `ValueError` there means another plugin owns `--pg`, whose value `db_backend` reads. The state is in `config.stash`, since pytester runs nested sessions in one process. A fixture used while the plugin is off fails saying what turns it on, rather than running unguarded.
+- `src/strata_python/db/project.py`: `find_table()`, the standard-library half of `Project.load`, so the plugin can ask without SQLAlchemy.
+- `pyproject.toml`: `strata_db = true` for this repo's own tests.
+- `tests/unit/test_db.py`: a stand-in plugin that adds `--pg` first; `--pg` and `--strata-pg` offered once on; the plugin off (guard not started, drivers not wrapped, `--pg` left to the other plugin, fixtures failing with the reason) with no table and with `strata_db = false`, in a subprocess since the guard is per process. All four failed before the change.
+- `README.md` (step 8, tests), `AGENTS.md` (the db plugin rule), `CHANGELOG.md`.
+
+
 **The shared database code moves in as `strata_python.db` (branch `claude/project-thread-t4kvbv`)**
 
 The owner asked whether the Python client in the database repo should move here, since the apps pull it from that repo by git commit, and agreed it was worth doing for the SQLite test databases as well. The inventory found eight apps on it at five different commits (four of them from before scratch databases moved off the live cluster), the names carrying a machine's name throughout (package, environment variables, database prefixes, the advisory-lock key, the pyproject table), untyped code, f-string SQL, and a test server that only ran on POSIX. The owner chose `STRATA_DB_*` and `[tool.strata-db]` as the new names.

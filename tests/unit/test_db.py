@@ -791,6 +791,78 @@ def test_fixtures_on_postgres(pytester: pytest.Pytester, how: str, monkeypatch: 
     result.assert_outcomes(passed=4)
 
 
+OTHER_PG_PLUGIN = """
+def pytest_addoption(parser):
+    parser.addoption("--pg", action="store_true", dest="pg", help="the old database package's flag")
+"""
+
+SQLITE_APP_TESTS = """
+from sqlalchemy import text
+
+
+def test_session(db_session, db_backend):
+    assert db_backend == "sqlite"
+    db_session.execute(text("INSERT INTO authors (name) VALUES ('Ada')"))
+"""
+
+
+def test_another_plugins_pg_does_not_clash(pytester: pytest.Pytester):
+    """Issue #11 and #19: an app that still has the old database package installed (it adds --pg too) can run its
+    tests. The stand-in is loaded with -p, so it registers before this plugin's entry point, as in the report."""
+    root = make_app(pytester.path, PARENT_CHILD)
+    strata_db(root, "revision", "-m", "initial", "--sqlite")
+    pytester.makepyfile(other_pg=OTHER_PG_PLUGIN, test_app=SQLITE_APP_TESTS)
+    pytester.syspathinsert()
+    result = pytester.runpytest_inprocess("-p", "other_pg", "-p", "no:randomly")
+    result.assert_outcomes(passed=1)
+    assert "already added" not in result.stdout.str() + result.stderr.str()
+
+
+def test_pg_and_strata_pg_are_offered_once_on(pytester: pytest.Pytester):
+    root = make_app(pytester.path, PARENT_CHILD)
+    strata_db(root, "revision", "-m", "initial", "--sqlite")
+    pytester.makepyfile(test_app="def test_flags(pytestconfig):\n    assert pytestconfig.getoption('--pg') is False\n")
+    pytester.runpytest_inprocess("-p", "no:randomly").assert_outcomes(passed=1)
+    help_text = pytester.runpytest_inprocess("--help").stdout.str()
+    assert "--pg" in help_text
+    assert "--strata-pg" in help_text
+
+
+OFF_TESTS = """
+import os
+
+import psycopg
+
+from strata_python.db import guard
+
+
+def test_guard_is_off():
+    assert not guard._testing and os.environ.get("STRATA_DB_TESTING") != "1"
+    assert not getattr(psycopg, "_strata_db_guarded", False)
+
+
+def test_fixtures_say_they_are_off(db_session):
+    pass
+"""
+
+
+@pytest.mark.parametrize("why", ["no table", "strata_db = false"])
+def test_plugin_stays_off_without_the_project_asking(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, why):
+    """Issue #19: SQLAlchemy and Alembic being installed is not enough. With no [tool.strata-db] (or with it turned
+    off in the ini) the guard does not start and --pg is not taken. A subprocess, since the guard is per process."""
+    if why == "no table":
+        pytester.makepyprojecttoml('[project]\nname = "other"\nversion = "0"\n')
+    else:
+        make_app(pytester.path)
+        pyproject = pytester.path / "pyproject.toml"
+        pyproject.write_text(pyproject.read_text() + "\n[tool.pytest.ini_options]\nstrata_db = false\n")
+    monkeypatch.delenv(guard.TESTING, raising=False)  # this run's guard sets it; the child must decide for itself
+    pytester.makepyfile(test_off=OFF_TESTS, other_pg=OTHER_PG_PLUGIN)
+    result = pytester.runpytest_subprocess("-p", "no:randomly", "-p", "other_pg", "--pg")
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(["*strata_python.db fixtures are off*"])
+
+
 def test_a_failed_sqlite_migration_rolls_back_its_ddl(app: Path, tmp_path: Path):
     """pysqlite does not begin a transaction before DDL by itself: a revision that creates a table and then fails
     must leave no table behind (review finding)."""

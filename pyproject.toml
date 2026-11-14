@@ -68,7 +68,7 @@ strata-db = "strata_python.db.cli:main"
 
 [project.entry-points.pytest11]
 strata_python = "strata_python.pytest_plugin"
-strata_python_db = "strata_python.db.pytest_plugin"   # inert unless the db extra is installed
+strata_python_db = "strata_python.db.pytest_plugin"   # inert unless the db extra is installed and the project has [tool.strata-db]
 
 [dependency-groups]
 dev = ["strata-python[dev,db]"]   # the same tools the apps get, and the db extra so its tests run
@@ -87,6 +87,7 @@ testpaths = ["tests/unit"]
 addopts = "-ra --timeout=300 --strict-markers --strict-config -p pytester -p no:strata_python -p no:strata_python_db"
 strata_env_prefix = "DEMO"
 strata_tuning_vars = ["DEMO_TUNE"]
+strata_db = true   # this repo has no [tool.strata-db] of its own; its tests need the db plugin and guard on
 markers = ["integration: runs a real server or subprocess end-to-end (tests/integration)"]
 
 [tool.coverage.run]
