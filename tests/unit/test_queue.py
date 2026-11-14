@@ -155,7 +155,6 @@ def test_cancel_queued_at_once_and_running_cooperatively(setup):
     running = q.enqueue("x")
 
     def slow(job: Job):
-        assert not q.heartbeat(job) or True
         q.cancel(job.id)
         assert not q.heartbeat(job)  # the heartbeat picks up the request
         assert job.stopping
