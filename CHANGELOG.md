@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.3 (2026-11-14)
+
 ## 0.2.2 (2026-11-14)
 
 ### Added
