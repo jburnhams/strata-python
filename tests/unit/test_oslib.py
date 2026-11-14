@@ -124,6 +124,12 @@ def test_detached_kwargs_start_a_new_session():
     import os
 
     kw = oslib.detached_kwargs()
+    if oslib.WIN:  # no sessions to read back: the flags must still start a process that runs and answers
+        p = subprocess.Popen([sys.executable, "-c", "print('ok')"], stdout=subprocess.PIPE, text=True, **kw)
+        out, _ = p.communicate(timeout=20)
+        assert out.strip() == "ok"
+        assert p.returncode == 0
+        return
     p = subprocess.Popen(
         [sys.executable, "-c", "import os; print(os.getsid(0))"], stdout=subprocess.PIPE, text=True, **kw
     )
@@ -133,5 +139,8 @@ def test_detached_kwargs_start_a_new_session():
 
 def test_load_average():
     load = oslib.load_average()
+    if oslib.WIN:  # Windows has no load average; the status page shows none rather than failing
+        assert load is None
+        return
     assert load is not None
     assert len(load) == 3
