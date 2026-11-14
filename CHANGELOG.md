@@ -4,6 +4,10 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `strata_python.pages` and the `[pdf]` extra (ReportLab, pypdfium2, Pillow): a scanned page described as blocks, lines, styled spans and figures in scan pixels (`Page`, `Block`, `Line`, `Span`, `Figure`, JSON with `to_dict`/`from_dict`), drawn as a PDF with real, embedded fonts by `pages.render.render(page, fonts)`, and read back with `rasterise(pdf, page, dpi)` (greyscale pixels at the scan's size) and `read_text(pdf)`. A span takes a font matcher's per-word fit as it is (`x`, `baseline_y`, `size_pt`, `tracking_em`, `hscale`, `weight_delta`); small capitals are synthesised unless the face is a small-caps cut; the same input gives the same bytes. For apps that rebuild scanned books, and for scoring a rebuild against the scan with the very renderer that prints it.
+
 ## 0.2.1 (2026-11-14)
 
 ### Added
