@@ -1,6 +1,6 @@
 # strata-python
 
-Common code for Python web server apps (FastAPI + CLI), the Python counterpart of [strata-react](https://github.com/jburnhams/strata-react). Every app made from [python-app-template](https://github.com/jburnhams/python-app-template) used to carry its own drifting copy of these modules; they live here once.
+Common code for the strata Python web server apps (FastAPI + CLI), the Python counterpart of [strata-react](https://github.com/jburnhams/strata-react). Every app made from [python-app-template](https://github.com/jburnhams/python-app-template) used to carry its own drifting copy of these modules; they live here once. It is opinionated and built for those apps rather than as a general-purpose library, but it is public, MIT-licensed and on PyPI.
 
 | Module | What it gives an app |
 |---|---|
@@ -11,16 +11,14 @@ Common code for Python web server apps (FastAPI + CLI), the Python counterpart o
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
 | pytest plugin | Loaded automatically: hermetic home and data folders, a no-network guard, `http_server` and `live_app` fixtures |
 | `strata-check` | The one gate: lockfile, ruff, `ruff format`, pyright strict, ty, unit tests with coverage |
+| `strata-public-check` | Fails on email addresses, private IPv4 addresses, home-folder paths and the regexes in `STRATA_PUBLIC_DENY` in a tree, sdist or wheel; run before anything public is published |
 
 ## Use it in an app
 
 ```toml
 # pyproject.toml
 [project]
-dependencies = ["strata-python"]
-
-[tool.uv.sources]
-strata-python = { git = "https://github.com/jburnhams/strata-python", tag = "v0.1.0" }   # pin a tag; uv.lock records the commit
+dependencies = ["strata-python>=0.2,<0.3"]   # from PyPI; while 0.x a minor release may break, so cap below the next one
 
 [tool.pytest.ini_options]
 strata_env_prefix = "MYAPP"              # MYAPP_HOME and MYAPP_DATA point into a tmp dir for every test
@@ -47,8 +45,10 @@ def create_app():
     return app
 ```
 
+To try an unreleased commit, add `[tool.uv.sources] strata-python = { git = "https://github.com/jburnhams/strata-python", rev = "<sha>" }` for the moment and remove it once the release is out.
+
 `scripts/check` in the app is `exec uv run --locked strata-check "$@"`; git hooks and CI call it. Optional `[tool.strata-check]` in `pyproject.toml` sets `paths` (default `src`, `tests`, `scripts`) and `tests` (default `tests/unit`).
 
 ## Develop
 
-`uv sync`, then `scripts/check` (add `--fast` to skip the tests, `--fix` for safe ruff fixes). Integration tests (`uv run pytest tests/integration`) run the gate on a tiny project and `serve` in a separate process. Read [AGENTS.md](AGENTS.md) before changing anything; every change gets a [CHANGELOG.md](CHANGELOG.md) entry.
+`uv sync`, then `scripts/check` (add `--fast` to skip the tests, `--fix` for safe ruff fixes). Integration tests (`uv run pytest tests/integration`) run the gate on a tiny project and `serve` in a separate process. Read [AGENTS.md](AGENTS.md) before changing anything; every change gets a [CHANGELOG.md](CHANGELOG.md) entry. Merging to main releases: `release.yml` bumps the version through its own PR, tags it and creates the GitHub release, and `pypi-publish.yml` uploads it to PyPI.

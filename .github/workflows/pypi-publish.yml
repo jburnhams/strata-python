@@ -1,0 +1,46 @@
+name: PyPI Publish
+
+# Builds the released tag, refuses anything personal or machine-specific, tests the build, then uploads it to PyPI
+# with trusted publishing (OIDC): PyPI trusts this workflow in this repo, so no API token is stored anywhere.
+# One-time setup on pypi.org: a (pending) trusted publisher for this repo, workflow pypi-publish.yml, environment pypi.
+
+on:
+  # "published" fires whether a release is created directly or finalized from a
+  # draft (softprops/action-gh-release creates a draft, then finalizes it).
+  release:
+    types: [published]
+  # Manual fallback to publish an existing tag, e.g. if a release run was missed.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish, e.g. v0.2.0"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # trusted publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - name: The tag and pyproject.toml agree
+        run: test "v$(uv version --short)" = "${{ inputs.tag || github.ref_name }}"
+      - run: uv run --locked strata-check
+      - run: uv run --locked pytest tests/integration
+      - run: uv build
+      - name: Nothing personal or machine-specific in what is uploaded
+        env:
+          STRATA_PUBLIC_DENY: ${{ secrets.STRATA_PUBLIC_DENY }}
+        run: uv run --locked strata-public-check dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1
