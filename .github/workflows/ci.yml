@@ -33,6 +33,11 @@ jobs:
       - name: Lockfile, lint, format and types (once, on the newest Python)
         if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'
         run: uv run --locked strata-check --fast
+      - name: Nothing personal or machine-specific in the tree or the build (STRATA_PUBLIC_DENY is a secret, so the owner's own names stay out of the repo)
+        if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'
+        env:
+          STRATA_PUBLIC_DENY: ${{ secrets.STRATA_PUBLIC_DENY }}
+        run: uv build && uv run --locked strata-public-check . dist/*
       - name: Unit tests with coverage (the floor is gated on Linux; macOS and Windows run the other branches of oslib)
         run: uv run --locked pytest tests/unit --cov --cov-report=term ${{ matrix.os != 'ubuntu-latest' && '--cov-fail-under=0' || '' }}
       - name: Integration tests

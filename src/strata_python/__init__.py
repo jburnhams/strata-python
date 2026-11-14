@@ -1,4 +1,4 @@
-"""Common code for Jonathan's Python web server apps (FastAPI + CLI): the parts every app was copying.
+"""Common code for the strata Python web server apps (FastAPI + CLI): the parts every app was copying.
 
 oslib        file locks, process liveness and termination, priority, how to start a CLI (POSIX and Windows)
 settings     one JSON settings file per app with environment overrides and validation
@@ -8,6 +8,7 @@ http_server  a real scripted HTTP server on loopback for tests of outbound reque
 live         run a FastAPI app on a real loopback port for tests
 pytest plugin (automatic once installed): hermetic environment, no-network guard, `http_server` and `live_app` fixtures
 check        `strata-check`, the one gate: lockfile, ruff, ruff format, pyright, ty, unit tests with coverage
+public_check `strata-public-check`: no email addresses, private addresses, home paths or owner-listed names in what is published
 """
 
 from importlib.metadata import PackageNotFoundError, version

@@ -1,0 +1,157 @@
+name: "Release"
+
+# After every green CI run on main, bump the version through a pull request
+# (main only accepts pull requests), merge it, then tag and release that commit.
+#
+# Version bump comes from the commit messages since the latest v* tag:
+#   "major"/"breaking" -> major, "minor"/"feat"/"feature" -> minor, else patch.
+#
+# The bump PR's merge commit carries [skip ci], so it doesn't start another
+# CI -> release cycle. The release (created with RELEASE_TOKEN so other
+# workflows fire) triggers pypi-publish.yml.
+#
+# Copied from leaflet-node's release.yml (see the docs repo, npm-libraries/release.md)
+# with uv in place of npm. Two changes: with no v* tag yet, the first release is
+# exactly the version in pyproject.toml, and dependabot's "update-type:
+# version-update:semver-major" trailer lines are ignored, since \bmajor\b matches
+# them and every dependency bump would otherwise be a major release.
+#
+# RELEASE_TOKEN needs contents + pull-requests write on this repo. If the main
+# ruleset ever requires approvals or status checks, the bump PR will wait for them.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches:
+      - main
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: "Bump, tag and release"
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+
+    steps:
+      # Use the latest main, not just the commit whose CI finished: if more PRs
+      # landed meanwhile, the bump must account for every commit it releases.
+      # Their own CI runs will then find nothing new to release.
+      - name: "Checkout main"
+        uses: "actions/checkout@v7"
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: "Setup uv"
+        uses: "astral-sh/setup-uv@v7"
+
+      - name: "Work out the next version"
+        id: version
+        run: |
+          set -euo pipefail
+          if [ -n "$(git tag --points-at HEAD --list 'v[0-9]*')" ]; then
+            echo "HEAD is already tagged; nothing to release."
+            exit 0
+          fi
+
+          last_tag=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)
+          if [ -z "$last_tag" ]; then
+            # First release: publish the version pyproject.toml already names, no bump
+            version=$(uv version --short)
+            echo "No v* tag yet; first release is v$version"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "first=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          range="$last_tag..HEAD"
+
+          # Ignore earlier release commits and dependabot's update-type trailers when choosing the bump
+          messages=$(git log --format=%B "$range" | grep -v '^ci: release v' | grep -v 'update-type:' || true)
+          if [ -z "$(tr -d '[:space:]' <<<"$messages")" ]; then
+            echo "No changes since $last_tag; nothing to release."
+            exit 0
+          fi
+
+          if grep -qE '\b([Mm]ajor|[Bb]reaking)\b' <<<"$messages"; then
+            bump=major
+          elif grep -qE '\b([Mm]inor|[Ff]eat|[Ff]eature)\b' <<<"$messages"; then
+            bump=minor
+          else
+            bump=patch
+          fi
+
+          IFS=. read -r major minor patch <<<"${last_tag#v}"
+          case "$bump" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+
+          version="$major.$minor.$patch"
+          echo "$last_tag -> v$version ($bump)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: "Use main as it is for the first release"
+        id: first
+        if: ${{ steps.version.outputs.first }}
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: "Open and merge the version bump PR"
+        id: bump
+        if: ${{ steps.version.outputs.version && !steps.version.outputs.first }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          branch="release/v$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git switch -C "$branch"
+          # Sets pyproject.toml's version and the project's entry in uv.lock together, so `uv sync --locked` still passes
+          uv version "$VERSION"
+          git commit -am "ci: release v$VERSION [skip ci]"
+          # Force: a re-run after a failed attempt replaces the bot's own branch
+          git push --force origin "$branch"
+
+          if [ "$(gh pr view "$branch" --json state --jq .state 2>/dev/null || true)" != "OPEN" ]; then
+            gh pr create --base main --head "$branch" \
+              --title "Release v$VERSION" \
+              --body "Automated version bump to v$VERSION after CI passed on main."
+          fi
+          # GitHub computes mergeability asynchronously, so retry briefly
+          for attempt in 1 2 3 4 5 6; do
+            if gh pr merge "$branch" --merge --delete-branch \
+              --subject "ci: release v$VERSION [skip ci]"; then
+              break
+            fi
+            if [ "$attempt" = 6 ]; then
+              echo "Could not merge the release PR; see the error above." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+          sha=$(gh pr view "$branch" --json mergeCommit --jq .mergeCommit.oid)
+          echo "Merged as $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: "Create tag and GitHub release"
+        if: ${{ steps.bump.outputs.sha || steps.first.outputs.sha }}
+        uses: "softprops/action-gh-release@v2"
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          target_commitish: ${{ steps.bump.outputs.sha || steps.first.outputs.sha }}
+          name: Release v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          # Must be the `token` input: the action ignores a GITHUB_TOKEN env var
+          # and would create the release as github-actions[bot], whose events
+          # don't trigger pypi-publish.yml.
+          token: ${{ secrets.RELEASE_TOKEN }}
