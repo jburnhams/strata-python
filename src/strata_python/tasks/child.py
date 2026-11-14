@@ -135,7 +135,8 @@ def main(
     if replies is None:
         # print() and the tools a handler runs write to the server's log, never into the answers
         replies = os.fdopen(oslib.stdout_to_stderr(), "w", encoding="utf8", buffering=1)
-    lines: IO[str] = sys.stdin if commands is None else commands
+    # Commands arrive on a private fd: what the handler's tools inherit as stdin is empty (see stdin_from_devnull).
+    lines: IO[str] = open(oslib.stdin_from_devnull(), encoding="utf8") if commands is None else commands  # noqa: SIM115
     if spec.get("lower_priority"):
         oslib.lower_priority(io=True)
     from strata_python.tasks.queue import Queue, jobs_table  # here, not at import: queue imports this module

@@ -185,12 +185,24 @@ def test_stdout_to_stderr_moves_what_the_process_and_its_tools_print():
     code = (
         "import os, subprocess, sys\n"
         "from strata_python import oslib\n"
+        "import threading\n"
         "out = os.fdopen(oslib.stdout_to_stderr(), 'w')\n"
+        "commands = open(oslib.stdin_from_devnull())\n"
+        "threading.Thread(target=commands.read, daemon=True).start()  # blocked on the pipe, as the job loop is\n"
         "print('from me', flush=True)\n"
-        "subprocess.run([sys.executable, '-c', 'print(\"from a tool\")'], check=True, timeout=20)\n"
+        "tool = 'import sys; print(\"from a tool, stdin \" + repr(sys.stdin.read()))'\n"
+        "subprocess.run([sys.executable, '-c', tool], check=True, timeout=20)\n"
         "out.write('the answer\\n')\n"
     )
-    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=True)
-    assert r.stdout == "the answer\n"
-    assert "from me" in r.stderr
-    assert "from a tool" in r.stderr
+    p = subprocess.Popen(
+        [sys.executable, "-c", code], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    assert p.stdout is not None
+    assert p.stdin is not None
+    answer = p.stdout.readline()  # its stdin stays open meanwhile, so the reader thread is blocked on it
+    p.stdin.close()
+    out, err = p.communicate(timeout=60)
+    assert p.returncode == 0, err
+    assert answer + out == "the answer\n"
+    assert "from me" in err
+    assert "from a tool, stdin ''" in err

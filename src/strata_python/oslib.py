@@ -222,6 +222,23 @@ def stdout_to_stderr() -> int:
     return saved
 
 
+def stdin_from_devnull() -> int:
+    """Give this process (and every process it starts) an empty stdin, and return a new fd on the old one, for a
+    child that reads its parent's commands there. On Windows this is what keeps a tool from hanging: a thread blocked
+    reading a synchronous pipe holds that pipe, and a tool that inherits it as stdin blocks starting up."""
+    saved = os.dup(0)
+    null = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(null, 0)
+    os.close(null)
+    if WIN:
+        import ctypes
+        import msvcrt
+
+        ctypes.windll.kernel32.SetStdHandle(-10, msvcrt.get_osfhandle(0))  # STD_INPUT_HANDLE
+    sys.stdin = open(0, closefd=False)  # noqa: SIM115 - fd 0 for the life of the process
+    return saved
+
+
 def watch_supervisor() -> bool:
     """In a child that `start_supervised` started: end this process group when the parent's end of the lifeline
     closes (the parent exited, crashed or was killed), so no tool is left running for a server that is gone. True
