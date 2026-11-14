@@ -1,4 +1,5 @@
 import argparse
+import sys
 
 import pytest
 
@@ -28,6 +29,46 @@ def test_doctor_reports_modules(capsys):
     assert out.startswith("demo 9.9, python ")
     assert "ok       json" in out
     assert "MISSING  no_such_module_here" in out
+
+
+def test_doctor_labels_optional_modules_checks_and_hint(capsys):
+    """Issues #15 and #17: labels, optional modules, the app's checks in the same columns, its own hint."""
+
+    def gpu():
+        return ("slow", "no CUDA device, running on the CPU")
+
+    def crashes():
+        raise RuntimeError("driver mismatch")
+
+    checks = [
+        cli.Check("python on the PATH", cli.program(sys.executable)),  # a full path: found on every OS
+        cli.Check("gpu", gpu),
+        cli.Check("cudnn", lambda: ("missing", "off"), optional=True),
+    ]
+    imports = [("JSON (settings files)", "json"), cli.Module("ultralytics-ish", "no_such_module_here", optional=True)]
+    assert cli.doctor("demo", "1", imports, checks=checks, hint="uv sync --group gpu") == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[1].startswith("  ok       JSON (settings files) ")
+    assert out[2] == "  missing  ultralytics-ish: uv sync --group gpu"
+    assert out[3] == f"  ok       python on the PATH {sys.executable}"
+    assert out[4] == "  slow     gpu: no CUDA device, running on the CPU"
+    assert out[5] == "  missing  cudnn: off"
+
+    failing = [
+        cli.Check("exiftool", cli.program("no-such-program-here", "apt install exiftool")),
+        cli.Check("x", crashes),
+    ]
+    assert cli.doctor("demo", "1", (), checks=failing) == 1
+    out = capsys.readouterr().out.splitlines()
+    assert out[1:] == ["  MISSING  exiftool: apt install exiftool", "  BROKEN   x: RuntimeError: driver mismatch"]
+
+
+def test_add_doctor_passes_checks_and_hint(capsys):
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest="cmd", required=True)
+    cli.add_doctor(sub, "demo", "1", ["no_such_module_here"], checks=[cli.Check("c", lambda: ("ok", ""))], hint="h")
+    assert go(p, "doctor") == 1
+    assert "  MISSING  no_such_module_here: h" in capsys.readouterr().out
 
 
 def test_doctor_ok(capsys):

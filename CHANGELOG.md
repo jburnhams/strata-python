@@ -4,6 +4,11 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `cli.add_doctor(..., checks=[...], hint="...")`: imports can be `(label, module)` pairs or `cli.Module(label, module, optional=True)`, and `cli.Check(label, fn)` rows (`fn` returns `(status, text)`; `ok`, `missing`, `slow` or `broken`) cover what an import cannot tell, with `cli.program("ffmpeg")` for a program on the PATH. Every app's rows line up the same. `cli.doctor(...)` runs the same thing directly. Replace an app's own `doctor` with these.
+- `web.base_app(..., health=lambda: {...})` adds the app's own fields to `GET /api/health` after `ok` and `version`; it may set `ok` to false. Replace an app's own health route with it.
+
 ### Changed
 
 - The documented way to declare an app's models base is now the class written out (`class Base(MappedAsDataclass, DeclarativeBase): metadata = MetaData(naming_convention=NAMING_CONVENTION)`, README step 8), because ty rejects `Base = make_base()` as a base class and fails the gate. `make_base()` still works and stays for code that needs a base at run time; an app that uses it for its models should switch.

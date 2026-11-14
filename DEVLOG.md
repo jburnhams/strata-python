@@ -4,6 +4,16 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-14
 
+**Doctor checks and health fields an app can add (issues #15, #17; branch `claude/project-thread-vzy9v6`)**
+
+strata-stills and strata-models each kept their own `doctor`, and strata-models its own `/api/health`, because the shared ones could not be extended. The two issues asked for the same doctor hook in two shapes (`(ok | None, line)` and a four-word status); this takes the four-word one, which says more, with `optional=` for the "not available, not a failure" case.
+
+- `src/strata_python/cli.py`: `Module`, `Check`, `Status`, `program()` and `doctor()`; `add_doctor` takes `checks` and `hint`. Rows keep the existing columns (a failing row is upper case, as `MISSING` was), and a check that raises is a `broken` row rather than a crashed doctor. Shared GPU checks (torch present, a device, a kernel runs) are left for when an app moves its doctor here and shows the exact checks it needs.
+- `src/strata_python/web.py`: `base_app(health=...)`, merged after `ok` and `version`, called per request.
+- `tests/unit/test_cli.py`, `tests/unit/test_web.py`: labels, optional modules, each status, a crashing check, a missing program with its hint, `add_doctor` passing them through; health fields over real HTTP, including `ok` turned false.
+- `README.md` (module table, steps 4 and 5), `CHANGELOG.md`.
+
+
 **Models: declare the base class, since ty cannot subclass `make_base()` (issue #20; branch `claude/project-thread-vzy9v6`)**
 
 strata-stills found that ty reports `unsupported-base` on `class Photo(Base)` when `Base = make_base()`, and the gate fails on ty's warnings. Reproduced with this repo's ty: a value typed `type[DataclassBase]` has no MRO ty can know. pyright accepts it, which is why PR #7's checks passed.

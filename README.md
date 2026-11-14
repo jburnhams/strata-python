@@ -6,8 +6,8 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 |---|---|
 | `strata_python.oslib` | Cross-platform file locks, process liveness (`pid_alive`), `kill_tree`, `lower_priority`, `venv_python`, `cli_command(module)` |
 | `strata_python.settings` | `Settings` / `Setting`: one JSON file in `~/.<app>` with `<APP>_*` environment overrides, validation (`absolute_path`, `non_empty`), atomic saves |
-| `strata_python.web` | `base_app` (health + settings routes), `add_web` (built web app or stand-in page at every non-API path), `with_base` (reverse-proxy-safe `<base href>`), `static_file` (path-safe), `serve` |
-| `strata_python.cli` | `add_doctor`, `add_set`, `add_serve` for the app's argparse subcommands |
+| `strata_python.web` | `base_app` (health with the app's own fields + settings routes), `add_web` (built web app or stand-in page at every non-API path), `with_base` (reverse-proxy-safe `<base href>`), `static_file` (path-safe), `serve` |
+| `strata_python.cli` | `add_doctor` (imports, labels, optional modules and the app's own `Check`s), `add_set`, `add_serve` for the app's argparse subcommands |
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
 | pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, and the `integration` marker on everything under `tests/integration` |
 | `strata_python.testing` | The fakes behind those fixtures (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) and the CLI runners `run_cli(main, *args)` and `run_module("myapp", *args, src=...)` |
@@ -101,7 +101,7 @@ def create_app():
     return app
 ```
 
-Delete the app's own `/api/health` and `/api/settings` routes, its `/assets` mount, SPA fallback, `with_base` and `static_file` copies and its `uvicorn.run` wrapper. `web.serve(app, argv, default_port=...)` replaces the last of these. A route whose reply needs more than `{ok, version}` adds its own route beside them.
+Delete the app's own `/api/health` and `/api/settings` routes, its `/assets` mount, SPA fallback, `with_base` and `static_file` copies and its `uvicorn.run` wrapper. `web.serve(app, argv, default_port=...)` replaces the last of these. For health fields of the app's own, pass `health=lambda: {"gpu": gpu_name()}`: they follow `ok` and `version`, and may set `ok` to false. It runs on every request, so keep it cheap.
 
 ### 5. The CLI
 
@@ -125,6 +125,19 @@ def main(argv=None):
 ```
 
 Delete the hand-written `doctor`, `set` and `serve` subparsers. Each app's port belongs in its deploy units, not in this library.
+
+A doctor that needs more than imports takes labels, optional modules, checks and its own hint, and prints every app's rows in the same columns:
+
+```python
+cli.add_doctor(
+    sub, "myapp", __version__,
+    ("fastapi", ("rawpy (DNG decoding)", "rawpy"), cli.Module("ultralytics", optional=True)),
+    checks=[cli.Check("ffmpeg", cli.program("ffmpeg", "apt install ffmpeg")), cli.Check("gpu", gpu_check)],
+    hint="uv sync (scripts/setup_env)",
+)
+```
+
+A check returns `(status, text)` with status `ok`, `missing`, `slow` (works, but not as it should; never fails) or `broken`, and an exception counts as `broken`. Doctor exits 1 when a required module or check is missing or broken. A check that may be missing without that being a fault is `Check(..., optional=True)`.
 
 ### 6. OS helpers
 

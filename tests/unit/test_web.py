@@ -124,3 +124,15 @@ def test_no_built_app_and_no_landing_is_a_404(static, live_app):
     with live_app(a) as base:
         assert get(base + "/")[0] == 404
         assert get(base + "/api/docs")[0] == 404
+
+
+def test_health_carries_the_apps_own_fields(live_app):
+    """Issue #17: strata-models' `{ok, version, gpu}`, called per request, and able to say the service cannot work."""
+    state = {"gpu": "RTX 4090"}
+    app = web.base_app(
+        "models", "2.0", health=lambda: {"gpu": state["gpu"]} if state["gpu"] else {"ok": False, "gpu": None}
+    )
+    with live_app(app) as base:
+        assert json.loads(get(base + "/api/health")[1]) == {"ok": True, "version": "2.0", "gpu": "RTX 4090"}
+        state["gpu"] = ""
+        assert json.loads(get(base + "/api/health")[1]) == {"ok": False, "version": "2.0", "gpu": None}
