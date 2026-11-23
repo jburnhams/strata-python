@@ -4,6 +4,11 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `strata_python.derive`: the files an editor shows, made from footage with ffmpeg. `proxy(src, out, *, height=540, gop=1/2, crf=23, interlace=None, info=None, progress=None, timeout=None)` writes an H.264/AAC MP4 for the browser and returns its `Probe`: interlaced footage deinterlaced for display (bwdif, one frame per frame), square pixels, a keyframe every `gop` seconds, the source's frame rate and times, never larger than the source. `thumbnails(src, folder, *, every=10, height=180, ...)` returns `Thumb(time, path)` JPEGs at exact multiples of `every`. `peaks(src, *, per_second=50, rate=8000)` returns `Peaks` (`min`, `max` from -1 to 1, `to_json()`), the pair strata-react's `Waveform` takes, read as it is decoded. `interlacing(path)` is "tff", "bff" or "progressive", from the stream's field order or ffmpeg's `idet` when the stream does not say interlaced. `RECIPE` holds each recipe's version for an app's cache key.
+- `media.ffmpeg(args, sink=callable)` hands stdout to `sink` in chunks as ffmpeg writes it, for output too big to hold (decoded audio of a long tape).
+
 ## 0.2.8 (2026-11-23)
 
 ### Added

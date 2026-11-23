@@ -10,6 +10,7 @@ of the JSON by hand. Here:
     duration(path)                           # seconds, float
     ffmpeg(["-i", src, "-ac", "1", out])     # -nostdin -hide_banner -v error -y; MediaError with stderr's tail
     ffmpeg([...], progress=lambda s: ...)    # seconds of output written so far, from -progress
+    ffmpeg([..., "-f", "s16le", "-"], sink=f) # stdout handed to f in chunks as it is written, never held whole
     available()                              # {"ffmpeg": True, "ffprobe": False}
 
 `MediaError` is a `RuntimeError` for a missing tool, a file ffprobe cannot read, a timeout or a failed ffmpeg run. Its
@@ -31,7 +32,7 @@ import subprocess
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import IO, Any, cast
 
 from strata_python import oslib
 
@@ -226,17 +227,23 @@ def ffmpeg(
     input: bytes | None = None,
     timeout: float | None = None,
     progress: Callable[[float], None] | None = None,
+    sink: Callable[[bytes], None] | None = None,
     level: str = "error",
     cwd: str | None = None,
 ) -> bytes:
     """Run `ffmpeg -nostdin -hide_banner -v <level> -y <args>` and return its stdout (for `-f ... -` output).
-    `progress(seconds)` is called as output is written (from `-progress`); then stdout is not returned. MediaError with
-    the tail of stderr when it fails or passes `timeout`."""
+    `progress(seconds)` is called as output is written (from `-progress`); then stdout is not returned. `sink(chunk)`
+    is given stdout as it arrives instead (decoded audio of a two-hour tape is too big to hold); not with `progress`,
+    which needs stdout for itself. MediaError with the tail of stderr when it fails or passes `timeout`."""
+    if progress is not None and sink is not None:
+        raise ValueError("ffmpeg's stdout carries either -progress or the output: pass progress or sink, not both")
     exe = tool("ffmpeg")
     base = [exe, "-hide_banner", "-v", level, "-y"]
     if input is None:
         base.insert(1, "-nostdin")
     cmd = [*base, *(os.fspath(a) for a in args)]
+    if sink is not None:
+        return _streamed(cmd, sink, timeout, cwd, input)
     if progress is None:
         proc = subprocess.Popen(  # noqa: S603 - our own ffmpeg command
             cmd,
@@ -270,8 +277,34 @@ def _kill(proc: subprocess.Popen[bytes], reap: bool = True) -> None:
 def _with_progress(
     cmd: list[str], progress: Callable[[float], None], timeout: float | None, cwd: str | None, data: bytes | None
 ) -> bytes:
-    """Read `-progress pipe:1` lines (`out_time_us=...`) and report seconds; stderr is drained on a thread so a chatty
-    ffmpeg cannot fill its pipe and stall."""
+    """Read `-progress pipe:1` lines (`out_time_us=...`) and report seconds."""
+
+    def lines(out: IO[bytes]) -> None:
+        for raw in out:
+            key, _, value = raw.decode(errors="replace").strip().partition("=")
+            if key in ("out_time_us", "out_time_ms"):  # both are microseconds (out_time_ms is misnamed by ffmpeg)
+                us = _num(value, int)
+                if us is not None and us >= 0:
+                    progress(us / 1e6)
+
+    return _piped(cmd, lines, timeout, cwd, data)
+
+
+def _streamed(
+    cmd: list[str], sink: Callable[[bytes], None], timeout: float | None, cwd: str | None, data: bytes | None
+) -> bytes:
+    def chunks(out: IO[bytes]) -> None:
+        while chunk := out.read(1 << 16):
+            sink(chunk)
+
+    return _piped(cmd, chunks, timeout, cwd, data)
+
+
+def _piped(
+    cmd: list[str], read: Callable[[IO[bytes]], None], timeout: float | None, cwd: str | None, data: bytes | None
+) -> bytes:
+    """Run ffmpeg with `read` consuming its stdout as it is written; stderr is drained on a thread so a chatty ffmpeg
+    cannot fill its pipe and stall. A `read` that raises stops ffmpeg and the error is raised as it is."""
     proc = subprocess.Popen(  # noqa: S603 - our own ffmpeg command
         cmd,
         stdin=subprocess.DEVNULL if data is None else subprocess.PIPE,
@@ -305,12 +338,12 @@ def _with_progress(
     if timer:
         timer.start()
     try:
-        for raw in out:
-            key, _, value = raw.decode(errors="replace").strip().partition("=")
-            if key in ("out_time_us", "out_time_ms"):  # both are microseconds (out_time_ms is misnamed by ffmpeg)
-                us = _num(value, int)
-                if us is not None and us >= 0:
-                    progress(us / 1e6)
+        try:
+            read(out)
+        except BaseException:
+            _kill(proc, reap=False)
+            proc.wait()
+            raise
         code = proc.wait()
     finally:
         if timer:

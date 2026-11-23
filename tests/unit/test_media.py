@@ -163,3 +163,31 @@ def test_probe_answers_ffprobe_gives(monkeypatch):
         media.probe("a", run=answer("", code=1))
     with pytest.raises(media.MediaError, match="could not start"):
         media.probe("a", run=_raises(OSError("exec format error")))
+
+
+@needs_ffmpeg
+def test_ffmpeg_sink_gets_stdout_in_chunks(clip):
+    got: list[bytes] = []
+    out = media.ffmpeg(["-i", clip, "-map", "0:a", "-ac", "1", "-f", "s16le", "-"], sink=got.append)
+    assert out == b""
+    assert sum(map(len, got)) == 2 * 22050 * 2  # 2 s of mono 16-bit at 22.05 kHz
+
+
+@needs_ffmpeg
+def test_ffmpeg_sink_that_raises_stops_ffmpeg(clip):
+    def boom(_chunk: bytes) -> None:
+        raise OSError("disk full")
+
+    with pytest.raises(OSError, match="disk full"):
+        media.ffmpeg(["-i", clip, "-f", "s16le", "-"], sink=boom)
+
+
+@needs_ffmpeg
+def test_ffmpeg_sink_failure_has_the_reason(tmp_path):
+    with pytest.raises(media.MediaError, match="No such file"):
+        media.ffmpeg(["-i", tmp_path / "none.wav", "-f", "s16le", "-"], sink=lambda _c: None)
+
+
+def test_ffmpeg_sink_and_progress_are_exclusive():
+    with pytest.raises(ValueError, match="not both"):
+        media.ffmpeg(["-version"], progress=lambda _s: None, sink=lambda _c: None)

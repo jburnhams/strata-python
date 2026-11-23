@@ -4,6 +4,15 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-23
 
+**`derive`: proxies, thumbnails and audio peaks beside `media.probe` (branch `claude/project-thread-42bdk4`)**
+
+strata-reels' first step (ingest) needs a browser proxy, thumbnails and audio peaks for every tape, and its plan puts them here because every app that shows footage needs the same three. The owner set that ingest starts from the raw footage: restoration is a strata-models job later in reels' pipeline, so the proxy only deinterlaces for display and changes nothing else.
+
+- `src/strata_python/derive.py` (**new**): `interlacing`, `proxy`, `thumbnails`, `Thumb`, `peaks`, `Peaks`, `RECIPE`. The proxy keeps the source's frames at their times (`-fps_mode passthrough`, bwdif `send_frame`), so a time chosen on it is the time in the source; the digitised VHS tapes are interlaced but do not say so (strata-models' VHS work had to force top field first), so a stream's "progressive" is checked with `idet` rather than believed, and an even split between the two field orders (fine detail in progressive footage) counts as progressive. Peaks are min/max pairs because that is what strata-react's `Waveform` draws.
+- `src/strata_python/media.py`: `ffmpeg(sink=...)`, and the progress reader and the new stdout reader share one `_piped` runner (stderr drained on a thread, timeout kill, a reader that raises stops ffmpeg).
+- `tests/unit/test_derive.py` (**new**): on generated PAL-shaped interlaced clips (with and without a field order), progressive clips and a square tone; `tests/unit/test_media.py`: the sink.
+- README (module row), AGENTS.md (layout), CHANGELOG.
+
 **`wav.read_wav` and `testing.sine_wav`, from strata-voice's studio (branch `claude/project-thread-cvjjmf`)**
 
 The owner asked for the recording studio's common code to live in the shared libraries. strata-voice checked each uploaded take's header with `wave` before keeping it; any app that takes recorded speech (or imports old recordings) needs the same check and the same test WAVs, so both move here. strata-react gets the browser half (capture, WAV writer, level meter) in the same change.
