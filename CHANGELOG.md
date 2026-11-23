@@ -4,6 +4,11 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Fixed
+
+- `oslib.lower_priority(nice)` sets the nice value to `nice` (never lower than the current one) instead of adding it, so `lower_priority(19)` gives 19 from a process that starts below 0. An app that worked around it with its own `setpriority` can drop that.
+- `pages.render.rasterise(pdf, dpi=page.dpi)` comes back exactly the scan's size: the page's points times `dpi / 72`, rounded. pdfium rounded up, so some sizes came back a pixel wider or taller. An app that padded or cropped the raster to the scan's size can drop that.
+
 ## 0.2.3 (2026-11-14)
 
 ## 0.2.2 (2026-11-14)

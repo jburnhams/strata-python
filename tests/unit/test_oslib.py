@@ -117,7 +117,49 @@ def test_lower_priority_io_in_a_child_reaches_its_children():
 
 
 def test_lower_priority_in_this_process_with_no_change():
-    oslib.lower_priority(0)  # nice(0) is a no-op, so this process keeps its priority
+    # -20 is never above the current value, so this process keeps its priority. Not 0: a macOS runner starts at -10,
+    # and raising this process to 0 kept the below-zero test's child from starting at -10 (PR #32's CI).
+    oslib.lower_priority(-20)
+
+
+@pytest.mark.skipif(oslib.WIN, reason="nice values are POSIX; Windows sets a priority class")
+@pytest.mark.parametrize(("start", "nice", "expected"), [(5, 10, 10), (15, 10, 15), (0, 19, 19)])
+def test_lower_priority_sets_the_nice_value_absolutely(start, nice, expected):
+    """Issue #28: `nice` is where the process ends, not an increment (os.nice would give 15 for the first case), and
+    it never lowers a process that is already further down. In a child, so this test process keeps its priority."""
+    code = (
+        "import os, sys\n"
+        "from strata_python import oslib\n"
+        "os.setpriority(os.PRIO_PROCESS, 0, int(sys.argv[1]))\n"
+        "oslib.lower_priority(int(sys.argv[2]))\n"
+        "print(os.getpriority(os.PRIO_PROCESS, 0))\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code, str(start), str(nice)], capture_output=True, text=True, check=True
+    ).stdout
+    assert int(out) == expected
+
+
+def _can_start_below_zero() -> bool:
+    """Root without CAP_SYS_NICE (a locked-down container) is refused too, so ask the kernel, in a child."""
+    if oslib.WIN:
+        return False
+    probe = "import os; os.setpriority(os.PRIO_PROCESS, 0, -10)"
+    return subprocess.run([sys.executable, "-c", probe], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not _can_start_below_zero(), reason="starting below 0 needs root with CAP_SYS_NICE")
+def test_lower_priority_from_below_zero_reaches_19():
+    """Issue #28 as seen: a macOS runner starts at -10, and os.nice(19) left the worker at 9."""
+    code = (
+        "import os\n"
+        "from strata_python import oslib\n"
+        "os.setpriority(os.PRIO_PROCESS, 0, -10)\n"
+        "oslib.lower_priority(19)\n"
+        "print(os.getpriority(os.PRIO_PROCESS, 0))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
+    assert int(out) == 19
 
 
 def test_detached_kwargs_start_a_new_session():

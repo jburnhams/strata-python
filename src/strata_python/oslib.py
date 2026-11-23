@@ -101,8 +101,12 @@ MAC = sys.platform == "darwin"
 
 
 def lower_priority(nice: int = 19, io: bool = False) -> None:
-    """Run this process at lower CPU priority (nice value on POSIX, below-normal/idle class on Windows). Children
-    inherit it. Best effort: a refusal is skipped.
+    """Run this process at lower CPU priority (nice value `nice` on POSIX, below-normal/idle class on Windows).
+    Children inherit it. Best effort: a refusal is skipped.
+
+    `nice` is the value the process ends at, not an increment: it is set absolutely and never lowers the current
+    one, so `lower_priority(19)` gives 19 even from a process that starts below 0 (issue #28; `os.nice` adds, so a
+    CI runner at -10 ended at 9).
 
     `io=True` also lowers its disk priority, for batch jobs that read many large files (hashing an archive, exiftool
     over a folder) and should not slow interactive use of the same disk: the idle I/O class on Linux (children
@@ -118,7 +122,9 @@ def lower_priority(nice: int = 19, io: bool = False) -> None:
                 k32.SetPriorityClass(k32.GetCurrentProcess(), 0x00100000)  # PROCESS_MODE_BACKGROUND_BEGIN
         return
     with contextlib.suppress(OSError, AttributeError):
-        os.nice(nice)
+        current = os.getpriority(os.PRIO_PROCESS, 0)
+        if nice > current:
+            os.setpriority(os.PRIO_PROCESS, 0, nice)
     if io:
         _lower_io_priority()
 
