@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.4 (2026-11-23)
+
 ### Fixed
 
 - `oslib.lower_priority(nice)` sets the nice value to `nice` (never lower than the current one) instead of adding it, so `lower_priority(19)` gives 19 from a process that starts below 0. An app that worked around it with its own `setpriority` can drop that.
