@@ -180,7 +180,10 @@ def test_detached_runs_a_real_process_that_reports_through_its_file(tmp_path):
         time.sleep(0.05)
     d = job.read()
     assert (d["output"], d["progress"], d["project"], d["pid"]) == ("out.mp4", {"done": 1}, "p", pid)
-    assert "finished" in (tmp_path / "logs" / "a.log").read_text()
+    log = tmp_path / "logs" / "a.log"
+    while "finished" not in log.read_text():  # the child prints after writing "done", so wait for it (PR #32's CI)
+        assert time.monotonic() < deadline, log.read_text()
+        time.sleep(0.05)
     assert not job.stop()  # not running
 
 
