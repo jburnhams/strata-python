@@ -13,6 +13,13 @@ The owner asked for the two issues raised while moving python-app-template onto 
 - `tests/unit/test_contracts.py`: every response shape lists all its fields as required, and `Page[Task]` in a served schema; `tests/unit/test_web.py`: the extra fields in the served schema, inferred and named, and the plain mapping unchanged.
 - README (server section), CHANGELOG.
 
+**Exact media time: `mediatime` (branch `claude/project-thread-1p0er6`)**
+strata-reels, the new video editor (milestone R1 of its plan: a digitised tape in, a highlight reel out), needs time that does not drift: source, edit and render time kept apart, frame-exact on 25 fps PAL and 30000/1001 NTSC, with the map from an edit back to its sources. strata-360 had its own (float seconds plus a UTC map); strata-vid keeps float seconds and its cuts drift. Both are apps that need the same thing, so it lives here. Rationals (the standard library's `Fraction`) rather than integer ticks: a tick base has to be chosen to fit every rate at once, a Fraction fits any, and the numbers here are small.
+- `src/strata_python/mediatime.py`: **new**. `rational`, `text`, `Rate`, `Span`, `Piece`, `TimeMap`. Spans are half-open, so two shots that meet share no frame; snapping goes to the earlier frame at exactly halfway, so a cut never moves past the frame it was in; a float is read by its shortest repr, so 0.1 is 1/10.
+- `tests/unit/test_mediatime.py`: **new**; includes 300 random edits at five rates where output, source and output again land on the same time exactly, and the float drift it replaces (0.04 added a thousand times lands a frame early).
+- `CHANGELOG.md` (Unreleased, Added), `README.md` (the module table).
+- Review: `Span.overlaps` said an empty span inside another overlapped it while `&` said they share nothing; it is now `&`'s answer (`mediatime.py`, a test in `test_mediatime.py`).
+
 **Issues #36 to #41: public-check for web apps, an openapi command, settings enums, and a server's records (branch `claude/project-thread-xzb4kc`)**
 
 The owner asked for the six issues flashtap raised. Each came from code flashtap wrote around a gap here.
