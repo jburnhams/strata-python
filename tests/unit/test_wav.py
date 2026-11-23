@@ -70,3 +70,23 @@ def test_bounds_the_length() -> None:
     with pytest.raises(WavError, match="3 seconds long; the longest kept is 2"):
         read_wav(sine_wav(3.0), max_seconds=2)
     assert read_wav(sine_wav(2.0), min_seconds=0.3, max_seconds=2).seconds == 2.0
+
+
+def test_a_recording_cut_short_after_its_header_is_refused(tmp_path: Path) -> None:
+    whole = sine_wav(1.0)
+    with pytest.raises(WavError, match="ends early: its header promises more sound"):
+        read_wav(whole[:44], min_seconds=0.5)
+    with pytest.raises(WavError, match="ends early"):
+        read_wav(whole[:-1])  # half of the last frame
+    path = tmp_path / "cut.wav"
+    path.write_bytes(whole[:1000])
+    with pytest.raises(WavError, match="ends early"):
+        read_wav(path)
+
+
+def test_an_empty_file_and_a_wav_with_no_frames(tmp_path: Path) -> None:
+    path = tmp_path / "empty.wav"
+    path.write_bytes(b"")
+    with pytest.raises(WavError, match="empty"):
+        read_wav(path)
+    assert read_wav(sine_wav(0.0)).frames == 0
