@@ -19,7 +19,8 @@ extra: `strata-python[db]`.
         s.add(Note(text="hi")); s.commit()
 
 Migrations: `strata-db revision -m "..."` (autogenerate), `strata-db migrate`, `strata-db check`; or in code
-`Project.load(__file__).upgrade(engine)` at service start. Tests: the plugin's `db_session` / `db_engine` / `db_url`
+`Project.load(__file__).upgrade(engine)` (or `.open()`, connect and migrate) at service start; a FastAPI server
+uses `strata_python.db.web.add_database` and its `DbSession` dependency. Tests: the plugin's `db_session` / `db_engine` / `db_url`
 / `db_env` fixtures and `strata_python.db.testing`. See the README.
 
 The names load on first use: the pytest plugin imports `strata_python.db.guard` in every app with strata-python
@@ -34,6 +35,9 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .config import (
         DatabaseNotConfigured as DatabaseNotConfigured,
+    )
+    from .config import (
+        local_url as local_url,
     )
     from .config import (
         normalise_url as normalise_url,
@@ -74,6 +78,7 @@ _WHERE = {
     "DatabaseNotConfigured": "config",
     "normalise_url": "config",
     "resolve_url": "config",
+    "local_url": "config",
     "url_for": "config",
     "connect": "engine",
     "session": "engine",
@@ -93,6 +98,7 @@ __all__ = [  # noqa: RUF022  (grouped as _WHERE is)
     "DatabaseNotConfigured",
     "normalise_url",
     "resolve_url",
+    "local_url",
     "url_for",
     "connect",
     "session",

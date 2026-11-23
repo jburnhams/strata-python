@@ -4,6 +4,20 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `strata-public-check` reads web source (`.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mdx`, `.css`, `.html`, `.svg`, `.vue`, `.env.example`) and skips `storybook-static/` and `baselines/` (#37). Remove the app's own privacy scan of its front end.
+- `[tool.strata-public-check] deny = ["\\bdate of birth\\b", {pattern = "...", kind = "age"}]`: case-insensitive patterns committed in the repo, reported under their kind with the match shown, skipped by an exclude and by `strata-public-check: ignore` like the built-in ones (#38). A bad entry exits 2.
+- `cli.add_openapi(sub, create_app)`: `myapp openapi [-o PATH|-] [--check]` writes `web/openapi.json` for strata-react's `strata-api-types`, via `web.openapi_text(app)` (sorted keys, indent 1, final newline); `testing.assert_openapi_current(create_app, path)` is the unit test; `contracts.ApiModel` keeps defaulted response fields required in the schema (#36).
+- `Setting(..., choices=[...])` and the `one_of(choices)` normaliser: case-insensitive, stored as the choice is spelled, refused with the list; `set` shows the choices and `/api/openapi.json` types the setting as an `enum`. `Settings(..., numbers=True)` sends `whole_between`/`number_between` settings as JSON numbers with `minimum`/`maximum` in the schema (off by default). `PUT /api/settings` takes numbers. `Settings.allowed(key)` (#41).
+- `strata_python.db`: a `strata-db.toml` inside the package (`strata-db init --package src/myapp`, with `[tool.strata-db] file = ...` pointing at it) so `Project.load(__file__)` works from an installed wheel (#40); `local_url(SETTINGS)` and `url_for(app, default=...)` for a SQLite fallback when nothing is configured; `Project.open(url=None, default=...)` connects and migrates; `connect` makes a SQLite file's folder (#39).
+- `strata_python.db.web`: `add_database(app, project, default=...)` opens and migrates the engine on the first request that needs it and disposes it when the server stops; `DbSession` is the per-request session dependency (#39).
+
+### Changed
+
+- `strata-public-check` on a folder inside a git checkout reads only the files git would commit (`git ls-files -co --exclude-standard`), so ignored tool output such as `.coverage` is not scanned; a folder git ignores (`dist`) is still read in full when named. A file with no suffix that holds a NUL byte is skipped as binary (#37).
+- `whole_between` and `number_between` are now small callable classes with `lo`/`hi` (they used to be closures); calling them is unchanged.
+
 ## 0.2.5 (2026-11-23)
 
 ### Added

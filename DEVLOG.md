@@ -4,6 +4,24 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-23
 
+**Issues #36 to #41: public-check for web apps, an openapi command, settings enums, and a server's records (branch `claude/project-thread-xzb4kc`)**
+
+The owner asked for the six issues flashtap raised. Each came from code flashtap wrote around a gap here.
+
+- `src/strata_python/public_check.py`: the web suffixes and `.env.example` are read, `storybook-static` and `baselines` skipped (#37). A folder in a git checkout is listed with `git ls-files -co --exclude-standard`, so `.coverage` after `pytest --cov` is not read; a folder git ignores is walked in full when named, since `strata-public-check dist` asks for exactly that; no git or no checkout falls back to the walk. A suffixless file with a NUL byte in its first 8 KiB is skipped, for `.coverage` outside a checkout. `[tool.strata-public-check] deny` (#38): strings or `{pattern, kind}` tables, compiled case-insensitive, checked with the built-ins (so an exclude and the ignore comment apply, and the match is printed: the pattern is public already). The issue's "scan any UTF-8 file" option was not taken: it would read `uv.lock` and every unknown format, and the suffix list is what reviewers can see.
+- `src/strata_python/web.py`: `openapi_text` (#36); `PUT /api/settings` takes numbers, so a web app on `numbers=True` can send back what it got.
+- `src/strata_python/cli.py`: `add_openapi`, writing with `\n` line ends on Windows too, or `--check` would never agree with a checkout; `set` shows a setting's choices.
+- `src/strata_python/testing.py`: `assert_openapi_current`, importing FastAPI only when called.
+- `src/strata_python/contracts.py`: `ApiModel` (`json_schema_serialization_defaults_required`), from the issue's note on flashtap's response model. The existing contracts are left as they are: changing them would change every app's generated types.
+- `src/strata_python/settings.py`: `one_of`, `Setting.choices` (applied after `normalise`), `allowed()`, and `model()` emitting a `Literal` (#41). `whole_between` and `number_between` became frozen dataclasses so `model()` can read their range. Numbers in the schema are behind `Settings(numbers=True)`: by default the wire stays strings, because turning `"2"` into `2` breaks every web app that reads the setting as text, and that should be the app's change, not a library upgrade's.
+- `src/strata_python/db/project.py`: `find_table` takes a `strata-db.toml` (top level keys) before a pyproject.toml and follows `file = ...` from `[tool.strata-db]` (#40); `migrations` is relative to the file's folder; a declaration inside a package puts the folder above its top package on `sys.path`, not the package itself. Of the issue's three options this is the one strata-db, the pytest plugin and the service all read; `Project.for_package` would have been a second declaration in Python. `Project.open` (#39).
+- `src/strata_python/db/cli.py`: `init --package DIR`; `revision` prints the file relative to the working folder.
+- `src/strata_python/db/config.py`: `local_url`, and `default=` on `resolve_url`/`url_for`, used only when no URL variable and no shared database is set (#39).
+- `src/strata_python/db/engine.py`: `connect` makes a SQLite file's folder.
+- `src/strata_python/db/web.py` **new**: `Database` (lazy, locked, retried after a failure), `add_database` wrapping the app's lifespan so the engine is disposed after it, `db_session` and `DbSession` (#39). In `db/` rather than `web.py`, so `web` never imports SQLAlchemy.
+- Tests: `test_public_check.py` (web suffixes, a real git checkout with ignored, untracked and deleted files, no git, repo patterns through `main`, bad entries), `test_cli.py` (the openapi command and its check, choices in `set`), `test_contracts.py`, `test_settings.py`, `test_web.py` (the enum and the numbers over real HTTP), `test_db.py` (a package declaration copied to a site-packages folder with no pyproject.toml and migrated from there; `local_url`; `open`; `add_database` over real HTTP with the app's own lifespan).
+- README (module table, settings, CLI, database), AGENTS.md layout, CHANGELOG.
+
 **Files, a polite HTTP client, ffprobe and ffmpeg, thumbnails and pairwise statistics (branch `claude/project-thread-8zfbch`)**
 
 The owner asked for the rest of the shared modules, prioritised by how many apps duplicate the code. A new survey of the apps' current code (cloned from GitHub) ranked what was left after the job queue: the HTTP client (listory, 360, takeout, tubes, planning and models' scripts, about ten copies), atomic writes and hashing (360, listory, stills, takeout, filecat, models), ffprobe and ffmpeg (360, listory, models: eight wrappers), thumbnails (360, stills, bright-horizons, scan) and pairwise statistics (stills' arena, models' evals). All five are here. Decision records stay out until an app needs them (candidate 10 of the plan).

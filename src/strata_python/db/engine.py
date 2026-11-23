@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 from collections.abc import Generator
@@ -27,6 +28,9 @@ def connect(app_or_url: str, **kw: Any) -> Engine:
     engine = create_engine(url, **kw)
     if engine.dialect.name == "sqlite":
         sqlite_pragmas(engine)
+        file = engine.url.database
+        if file and file != ":memory:" and not file.startswith("file:"):
+            os.makedirs(os.path.dirname(os.path.abspath(file)), exist_ok=True)  # a fallback in a folder not made yet
     return engine
 
 

@@ -12,6 +12,9 @@ has no schemas.
 
 The shared database has no built-in name: the name is the owner's, and this package is public (AGENTS.md rule 4).
 
+An app that should still work before it is given a database (a checkout, a new deployment) passes a `default`, usually
+`local_url(SETTINGS)`: a SQLite file in its settings folder. It is used only when nothing above is set.
+
 A real Postgres database is opt-in (see `strata_python.db.guard`): url_for() and connect() refuse one unless the
 process has `STRATA_DB_LIVE=1`, and refuse it always during tests.
 """
@@ -20,6 +23,10 @@ from __future__ import annotations
 
 import os
 import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from strata_python.settings import Settings
 
 URL = "STRATA_DB_URL"
 DATABASE = "STRATA_DB_DATABASE"
@@ -67,19 +74,36 @@ def with_search_path(url: str, schema: str) -> str:
     return url + ("&" if "?" in url else "?") + f"options=-csearch_path%3D{schema}"
 
 
-def resolve_url(app: str, schema: str | None = None) -> str:
-    """Where `app`'s data is (see the module docstring), without the live-database check."""
+def local_url(home: Settings | str | os.PathLike[str], name: str | None = None) -> str:
+    """A SQLite file for an app with no database configured: `<home>/<name>.db`, where home is a folder or the app's
+    `Settings` (its folder, `<APP>_HOME` or `~/.<app>`, and its name). `connect` makes the folder."""
+    from strata_python.settings import Settings
+
+    if isinstance(home, Settings):
+        folder, name = home.home(), name or home.app
+    else:
+        folder = os.fspath(home)
+        if not name:
+            raise ValueError("local_url(folder) needs the app name")
+    return normalise_url(os.path.join(folder, f"{name}.db"))
+
+
+def resolve_url(app: str, schema: str | None = None, *, default: str | None = None) -> str:
+    """Where `app`'s data is (see the module docstring), without the live-database check. `default` (a URL or a
+    path) is used when nothing is configured, instead of raising DatabaseNotConfigured."""
     for var in (URL, env_name(app)):
         if value := os.environ.get(var):
             return with_search_path(normalise_url(value), schema or app)
+    if default is not None and not shared_database():
+        return normalise_url(default)
     return schema_url(schema or app)
 
 
-def url_for(app: str, schema: str | None = None) -> str:
+def url_for(app: str, schema: str | None = None, *, default: str | None = None) -> str:
     """resolve_url(), refused (guard.LiveDatabaseRefused) when it is a real Postgres database and the process has
     not opted in with `STRATA_DB_LIVE=1`, or is running tests."""
     from .guard import check_url
 
-    url = resolve_url(app, schema)
+    url = resolve_url(app, schema, default=default)
     check_url(url, f"url_for({app!r})")
     return url
