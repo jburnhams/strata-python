@@ -4,6 +4,10 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `strata_python.mediatime`: exact time for media. `rational(...)` (seconds as a `Fraction` from an int, "p/q" or decimal text, a Decimal, or a float by its shortest repr), `Rate` (`parse("30000/1001")`, `frame_at`, `time_of`, `snap`), `Span` (half-open `[start, end)`: `duration`, `in`, `&`, `shift`, `frames(rate)`), `Piece` and `TimeMap` (an edit's output time to its sources and back: `sequence(ranges)`, `to_source(t)`, `to_output(source, t)`), all with exact JSON (`text`, `to_json`, `from_json`).
+
 ## 0.2.6 (2026-11-23)
 
 ### Added
