@@ -16,6 +16,7 @@ Testing policy).
   Sleeper          `time.sleep` that returns at once and records `.delays`
   run_cli          an argparse `main(argv)` in this process -> CliResult; run_module the same as a real `python -m`
   assert_openapi_current  the committed schema file equals what the app answers now (cli.add_openapi writes it)
+  sine_wav         a short PCM WAV of a tone (or silence), for an app's upload and `wav.read_wav` tests
   FakeModels       a stand-in strata-models service (jobs, leases, registry) for `strata_python.clients.models`; served
                    by the `fake_models` fixture. MODELS_RESULTS holds one reply per role in the service's shapes.
 """
@@ -25,11 +26,14 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import math
 import os
+import struct
 import subprocess
 import sys
 import urllib.error
 import urllib.request
+import wave
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from email.message import Message
@@ -432,3 +436,28 @@ class FakeModels:
         if not 1 <= lease_id <= len(self.leases):
             raise error(404, f"no lease {lease_id}")
         return self.leases[lease_id - 1]
+
+
+def sine_wav(
+    seconds: float = 1.0,
+    *,
+    rate: int = 16_000,
+    width: int = 2,
+    channels: int = 1,
+    hz: float = 220.0,
+    amplitude: float = 0.3,
+) -> bytes:
+    """A PCM WAV of a tone at `amplitude` (0 to 1; 0 is silence): real bytes an app's upload tests send."""
+    full = (1 << (8 * width - 1)) - 1
+    frames = bytearray()
+    for i in range(round(seconds * rate)):
+        v = round(full * amplitude * math.sin(2 * math.pi * hz * i / rate))
+        sample = struct.pack("<i", v)[:width] if width > 1 else struct.pack("<B", v + 128)
+        frames += sample * channels
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(width)
+        w.setframerate(rate)
+        w.writeframes(bytes(frames))
+    return out.getvalue()

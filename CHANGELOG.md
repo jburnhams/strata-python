@@ -4,6 +4,11 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `strata_python.wav`: `read_wav(data_or_path, *, channels=1, widths=(2, 3), min_rate=16_000, min_seconds=0.0, max_seconds=None)` returns a `WavInfo` (`sample_rate`, `sample_width`, `channels`, `frames`, `seconds`) or raises `WavError` (a `ValueError`, answered as a 400) with a sentence, for an app that takes recorded speech (strata-react's `useRecorder` uploads). Replace the app's own `wave` header check.
+- `strata_python.testing.sine_wav(seconds, *, rate, width, channels, hz, amplitude)`: real PCM WAV bytes for an app's upload tests.
+
 ## 0.2.6 (2026-11-23)
 
 ### Added
