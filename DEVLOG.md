@@ -4,6 +4,15 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-23
 
+**`derive`: proxies, thumbnails and audio peaks beside `media.probe` (branch `claude/project-thread-42bdk4`)**
+
+strata-reels' first step (ingest) needs a browser proxy, thumbnails and audio peaks for every tape, and its plan puts them here because every app that shows footage needs the same three. The owner set that ingest starts from the raw footage: restoration is a strata-models job later in reels' pipeline, so the proxy only deinterlaces for display and changes nothing else.
+
+- `src/strata_python/derive.py` (**new**): `interlacing`, `proxy`, `thumbnails`, `Thumb`, `peaks`, `Peaks`, `RECIPE`. The proxy keeps the source's frames at their times (`-fps_mode passthrough`, bwdif `send_frame`), so a time chosen on it is the time in the source; the digitised VHS tapes are interlaced but do not say so (strata-models' VHS work had to force top field first), so a stream's "progressive" is checked with `idet` rather than believed, and an even split between the two field orders (fine detail in progressive footage) counts as progressive. Thumbnails use a `select` on each frame's time rather than the `fps` filter, which drops the picture for the last stretch (a 12 s clip at 10 s steps gave one thumbnail, not two). Each thumbnail run stages in its own temporary folder (Codex on #56: two runs into one folder shared a fixed `.part` name and deleted each other's). Peaks are min/max pairs because that is what strata-react's `Waveform` draws.
+- `src/strata_python/media.py`: `ffmpeg(sink=...)`, and the progress reader and the new stdout reader share one `_piped` runner (stderr drained on a thread, timeout kill, a reader that raises stops ffmpeg).
+- `tests/unit/test_derive.py` (**new**): on generated PAL-shaped interlaced clips (with and without a field order), progressive clips and a square tone; `tests/unit/test_media.py`: the sink.
+- README (module row), AGENTS.md (layout), CHANGELOG.
+
 **Issues #52 to #55, from tubes moving onto 0.2.7 (branch `claude/project-thread-w34kcw`)**
 
 The owner asked for the four issues tubes (tubes#89) raised; each one was a workaround it had to carry.
