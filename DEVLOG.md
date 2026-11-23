@@ -4,6 +4,16 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-23
 
+**Issues #52 to #55, from tubes moving onto 0.2.7 (branch `claude/project-thread-w34kcw`)**
+
+The owner asked for the four issues tubes (jburnhams/tubes#89) raised; each one was a workaround it had to carry.
+
+- `src/strata_python/settings.py`: `Setting.parse` reads a JSON number for `number_between`/`whole_between` and a bool for `boolean` (#52). Only there: elsewhere `str(5)` would still pass a hand-edited number off as a deliberate string, so a number for a path is still refused. An int is written with `str` (a float of 1e16 would come back as `1e+16`), a float through `_num`, so `4.0` reads as `"4"` for a whole number. `Settings.value` logs an ignored value once per key, place and value (it is read on every `get`, so once per read would flood the log). `number_between` takes `hi=None` and `lo_open`, `whole_between` takes `hi=None`, and `positive(hi)` is the open-at-0 case (#53); a flag on the existing class rather than a new one, so `model()` keeps recognising it and an app's `number_between(lo, hi)` is untouched. The schema says `exclusiveMinimum` for an open bound and leaves `maximum` out when there is none.
+- `src/strata_python/tasks/ticker.py`: `fn`'s number is the next wait (a bool and NaN are not, a negative one means now, `inf` waits for a poke), `poke()` sets a second Event so a wake does not stop the loop, and the Event is cleared before the run so a poke during a run runs it again straight after instead of being lost (#54). `next_at` is wall-clock, for a status page.
+- `src/strata_python/web.py`: `Status = int | Callable[[Exception], int]`, called in the one handler (#55).
+- `tests/unit/test_settings.py`, `tests/unit/test_tasks.py`, `tests/unit/test_web.py`: each case above, with the prefetcher's shape for the Ticker and a 502/503 by cause through a live server.
+- `README.md`, `CHANGELOG.md`: the settings, Ticker and error-handler notes.
+
 **`wav.read_wav` and `testing.sine_wav`, from strata-voice's studio (branch `claude/project-thread-cvjjmf`)**
 
 The owner asked for the recording studio's common code to live in the shared libraries. strata-voice checked each uploaded take's header with `wave` before keeping it; any app that takes recorded speech (or imports old recordings) needs the same check and the same test WAVs, so both move here. strata-react gets the browser half (capture, WAV writer, level meter) in the same change.

@@ -13,6 +13,7 @@ from strata_python.settings import (
     iso_date,
     non_empty,
     number_between,
+    positive,
     whole_between,
 )
 
@@ -285,3 +286,76 @@ def test_choices_normalise_case_and_refuse_others_with_the_list(isolated_env, mo
     assert Settings("demo", [Setting("a", default="")]).allowed("a") is None
     assert Settings("demo", [ListSetting("a")]).allowed("a") is None
     assert Settings("demo", [Setting("a", default="x", normalise=one_of(["x", "y"]))]).allowed("a") == ("x", "y")
+
+
+def test_open_and_unbounded_ranges():
+    half_life = number_between(0, lo_open=True)
+    assert [half_life(v) for v in ("1e-9", "0.5", "1000000")] == ["1e-09", "0.5", "1000000"]
+    for bad in ("0", "-1"):
+        with pytest.raises(ValueError, match=r"^must be more than 0$"):
+            half_life(bad)
+    assert positive() == half_life
+    with pytest.raises(ValueError, match=r"^must be more than 0 and at most 10$"):
+        positive(10)("11")
+    with pytest.raises(ValueError, match=r"^must be a number of at least 1$"):
+        number_between(1)("0.5")
+    per_day = whole_between(0)
+    assert per_day("1000000000") == "1000000000"
+    with pytest.raises(ValueError, match=r"^must be a whole number of at least 0$"):
+        per_day("-1")
+
+
+def test_the_schema_of_open_and_unbounded_ranges(isolated_env):
+    s = Settings(
+        "demo",
+        [
+            Setting("cache_gb", default="750", normalise=positive()),
+            Setting("budget", default="5", normalise=positive(100)),
+            Setting("per_day", default="50", normalise=whole_between(1)),
+        ],
+        numbers=True,
+    )
+    props = s.model().model_json_schema()["properties"]
+    assert (props["cache_gb"]["type"], props["cache_gb"]["exclusiveMinimum"]) == ("number", 0)
+    assert "minimum" not in props["cache_gb"]
+    assert "maximum" not in props["cache_gb"]
+    assert (props["budget"]["exclusiveMinimum"], props["budget"]["maximum"]) == (0, 100)
+    assert (props["per_day"]["minimum"], "maximum" in props["per_day"]) == (1, False)
+
+
+def test_json_numbers_and_booleans_in_an_existing_file_are_kept(typed, isolated_env):
+    # An app's own settings file from before it moved onto Settings (issue #52), or a hand edit that wrote 720.
+    os.makedirs(typed.home())
+    with open(typed.path(), "w", encoding="utf8") as f:
+        json.dump({"vram_gb": 12.5, "slots": 4.0, "gpu": True, "until": 20261201}, f)
+    assert (typed.get("vram_gb"), typed.get("slots"), typed.get("gpu")) == ("12.5", "4", "true")
+    assert typed.get("until") == ""  # a number where the normaliser reads text is still refused
+    with open(typed.path(), "w", encoding="utf8") as f:
+        json.dump({"slots": True, "vram_gb": False, "gpu": 1}, f)  # a bool is not a number, nor 1 a bool
+    assert (typed.get("slots"), typed.get("vram_gb"), typed.get("gpu")) == ("2", "8", "false")
+    with open(typed.path(), "w", encoding="utf8") as f:
+        json.dump({"slots": 4.5, "vram_gb": float("inf")}, f)  # out of the normaliser's reach as ever
+    assert (typed.get("slots"), typed.get("vram_gb")) == ("2", "8")
+
+
+def test_bind_carries_a_files_numbers_over(typed, isolated_env):
+    os.makedirs(typed.home())
+    with open(typed.path(), "w", encoding="utf8") as f:
+        json.dump({"slots": 3, "gpu": True}, f)
+    store = DictStore()
+    typed.bind(store)
+    assert (store.rows["slots"], store.rows["gpu"]) == ("3", "true")
+
+
+def test_an_ignored_value_is_logged_once(typed, isolated_env, monkeypatch, caplog):
+    os.makedirs(typed.home())
+    with open(typed.path(), "w", encoding="utf8") as f:
+        json.dump({"slots": "lots"}, f)
+    monkeypatch.setenv("DEMO_SLOTS", "40")
+    with caplog.at_level("WARNING", logger="strata_python.settings"):
+        assert typed.get("slots") == typed.get("slots") == "2"
+    lines = [r.getMessage() for r in caplog.records]
+    assert lines == [
+        "setting slots: ignoring '40' from DEMO_SLOTS (must be a whole number from 1 to 16); using the next source",
+        "setting slots: ignoring 'lots' from the settings (must be a whole number); using the next source",
+    ]

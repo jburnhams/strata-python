@@ -282,3 +282,78 @@ def test_ticker_logs_when_no_handler_is_given(caplog):
     t.stop()
     assert "poller failed" in caplog.text
     assert isinstance(t.last_error, OSError)
+
+
+def wait_for(cond, seconds=5.0):
+    deadline = time.monotonic() + seconds
+    while not cond():
+        assert time.monotonic() < deadline
+        time.sleep(0.005)
+
+
+def test_ticker_fn_chooses_the_next_wait_and_poke_wakes_it():
+    # The prefetcher's shape (issue #54): short after work, long when there was none, and woken when work arrives.
+    work = ["a", "b"]
+    done = []
+
+    def step():
+        if not work:
+            return 3600  # nothing to do: wait long
+        done.append(work.pop(0))
+        return 0.001
+
+    t = Ticker(3600, step, name="prefetch", immediately=True).start()
+    try:
+        wait_for(lambda: done == ["a", "b"] and t.next_at is not None)
+        next_at = t.next_at
+        assert next_at is not None
+        assert 3500 < next_at - time.time() <= 3600
+        work.append("c")
+        t.poke()
+        wait_for(lambda: done == ["a", "b", "c"])
+    finally:
+        t.stop()
+    assert not t.running
+    assert t.next_at is None
+    t.poke()  # stopped: nothing happens
+
+
+def test_ticker_keeps_every_s_for_none_bool_nan_and_failures():
+    outs = iter([None, True, float("nan"), "soon"])
+    waits = []
+
+    def step():
+        return next(outs)
+
+    t = Ticker(42, step, name="t")
+    for _ in range(4):
+        waits.append(t._tick())
+    assert waits == [42, 42, 42, 42]
+    t.fn = lambda: -5
+    assert t._tick() == 0  # a negative wait means now
+
+    def fail():
+        raise OSError("down")
+
+    t.fn, t.on_error = fail, lambda e: None
+    assert t._tick() == 42
+
+
+def test_ticker_an_infinite_wait_lasts_until_poked():
+    calls = []
+
+    def step():
+        calls.append(1)
+        return float("inf")
+
+    t = Ticker(0.001, step, name="idle", immediately=True).start()
+    try:
+        wait_for(lambda: calls and t.next_at is None and t._wake is not None)
+        time.sleep(0.05)
+        assert len(calls) == 1
+        t.poke()
+        wait_for(lambda: len(calls) == 2)
+    finally:
+        started = time.monotonic()
+        t.stop()
+        assert time.monotonic() - started < 2

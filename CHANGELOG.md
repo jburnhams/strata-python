@@ -4,6 +4,16 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `settings.positive(hi=None)` and `number_between(lo, hi=None, lo_open=False)`: a number that must be more than 0 with no natural floor (a cache size, a half-life) says "must be more than 0" and is `exclusiveMinimum` in the schema with `numbers=True` (#53). `hi` is optional on `number_between` and `whole_between` too, for a limit with no ceiling. Replace a hand-made `number_between` subclass with `positive()`.
+- `tasks.Ticker`: a `fn` that returns a number chooses the wait before its next run (`None`, or no return, keeps `every_s`); `poke()` runs it now; `next_at` is the `time.time()` of the next run (#54). Replace a hand-written `while not stopping: wake.wait(WAITS[step()])` loop.
+- `web.add_error_handlers`: a status may be a function of the exception, `{SourceError: lambda e: 502 if source.configured() else 503}`, answered with the same `ErrorBody` (#55). Replace handlers added with `app.add_exception_handler` for that.
+
+### Fixed
+
+- `Settings`: a JSON number in the settings file (or the store) is read for a `number_between` or `whole_between` setting, and a JSON `true`/`false` for a `boolean` one, so a file an app wrote before it moved onto `Settings` keeps its values (#52). A stored or environment value that is ignored is now logged once as a warning. Drop a `JsonFileStore` subclass that turned numbers into text.
+
 ## 0.2.9 (2026-11-23)
 
 ## 0.2.8 (2026-11-23)

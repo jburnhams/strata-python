@@ -162,7 +162,14 @@ def test_error_handlers_answer_the_apps_exceptions_as_error_bodies(live_app):
             self.payload = {"queue": 3}
 
     app = web.base_app("demo", "1")
-    web.add_error_handlers(app, {Busy: 429})
+
+    class SourceError(Exception):
+        def __init__(self, msg, configured):
+            super().__init__(msg)
+            self.configured = configured
+
+    # A status by cause (issue #55): not configured here is a 503, configured but failed a 502.
+    web.add_error_handlers(app, {Busy: 429, SourceError: lambda e: 502 if e.configured else 503})
     raises = {
         "value": ValueError("page must be a number"),
         "key": KeyError("book 7"),
@@ -170,6 +177,8 @@ def test_error_handlers_answer_the_apps_exceptions_as_error_bodies(live_app):
         "conflict": Conflict("scan is already running", {"key": "a"}),
         "down": Unavailable("strata-models is not reachable"),
         "busy": Busy("try later"),
+        "unset": SourceError("no API key is set", configured=False),
+        "failed": SourceError("the source said no", configured=True),
     }
 
     @app.get("/api/raise/{what}")
@@ -191,6 +200,8 @@ def test_error_handlers_answer_the_apps_exceptions_as_error_bodies(live_app):
         assert get("conflict") == (409, {"detail": "scan is already running", "payload": {"key": "a"}})
         assert get("down")[0] == 503
         assert get("busy") == (429, {"detail": "try later", "payload": {"queue": 3}})
+        assert get("unset") == (503, {"detail": "no API key is set", "payload": None})
+        assert get("failed") == (502, {"detail": "the source said no", "payload": None})
     only = web.base_app("demo", "1")
     web.add_error_handlers(only, {Busy: 429}, defaults=False)
     assert ValueError not in only.exception_handlers
