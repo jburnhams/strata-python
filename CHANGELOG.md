@@ -4,6 +4,14 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `web.add_system(..., extra_model=AppNumbers)` (or `extra` annotated `-> AppNumbers`, which may return the model): the route's response is `<App>SystemInfo`, `SystemInfo` plus the app's fields, so they are in `/api/openapi.json` and the generated types (#46). Replace the hand-written `Schema<'SystemInfo'> & {...}` with `Schema<'<App>SystemInfo'>`. Without a model, `extra` works as before.
+
+### Changed
+
+- The response contracts (`Page`, `Health`, `SystemInfo`, `Folder`, `ServiceStatus`, `ErrorBody`, `Task`, `Progress`) are built on `ApiModel`, so a field with a default is required in the response schema: `Page.next` is `string | null` in the generated types, not `next?` (#45). Drop the app's `page.next ?? null` and similar fill-ins. An app that takes one of them as a request body gets `-Input` and `-Output` schemas for it.
+
 ## 0.2.6 (2026-11-23)
 
 ### Added
