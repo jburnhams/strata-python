@@ -113,3 +113,68 @@ def test_set_shows_and_takes_a_list_joined(capsys):
     go(p, "set", "names", "a,b, c")
     assert capsys.readouterr().out.strip() == "names = a,b,c"
     assert s.get_list("names") == ["a", "b", "c"]
+
+
+def _app():
+    from strata_python import web
+
+    app = web.base_app("démo", "1.0")
+
+    @app.get("/api/zeta")
+    def zeta() -> dict[str, int]:
+        return {"z": 1}
+
+    return app
+
+
+def openapi_parser(default):
+    p = argparse.ArgumentParser(prog="demo")
+    cli.add_openapi(p.add_subparsers(dest="cmd", required=True), _app, default=default)
+    return p
+
+
+def test_openapi_writes_checks_and_prints(tmp_path, capsys):
+    """Issue #36: the schema file strata-api-types reads, stable so a diff compares like with like."""
+    target = tmp_path / "web" / "openapi.json"
+    p = openapi_parser(target)
+    assert go(p, "openapi", "--check") == 1
+    assert "missing" in capsys.readouterr().err
+    assert go(p, "openapi") == 0
+    text = target.read_bytes().decode()
+    assert text.endswith("}\n")
+    assert "\r" not in text
+    assert '"title": "démo"' in text  # not escaped
+    assert text.index('"/api/health"') < text.index('"/api/zeta"')  # keys sorted
+    assert go(p, "openapi", "--check") == 0
+    target.write_text(text.replace("démo", "demo"), encoding="utf-8")
+    assert go(p, "openapi", "--check") == 1
+    assert "out of date" in capsys.readouterr().err
+    other = tmp_path / "other.json"
+    assert go(p, "openapi", "-o", str(other)) == 0
+    assert other.read_text(encoding="utf-8") == text
+    capsys.readouterr()
+    assert go(p, "openapi", "-o", "-") == 0
+    assert capsys.readouterr().out == text
+    with pytest.raises(SystemExit, match="give -o PATH"):
+        go(p, "openapi", "-o", "-", "--check")
+
+
+def test_assert_openapi_current(tmp_path):
+    from strata_python.testing import assert_openapi_current
+
+    target = tmp_path / "openapi.json"
+    with pytest.raises(AssertionError, match="missing"):
+        assert_openapi_current(_app, target)
+    go(openapi_parser(target), "openapi")
+    assert_openapi_current(_app, target)
+    target.write_text("{}\n")
+    with pytest.raises(AssertionError, match="out of date"):
+        assert_openapi_current(_app, target)
+
+
+def test_set_shows_the_choices(capsys):
+    s = Settings("demo", [Setting("mode", default="mixed", choices=["mixed", "review"])])
+    go(build(s), "set", "mode", "Review")
+    assert capsys.readouterr().out.strip() == "mode = review  (one of: mixed, review)"
+    with pytest.raises(SystemExit, match="mode: must be one of mixed, review"):
+        go(build(s), "set", "mode", "x")

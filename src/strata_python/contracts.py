@@ -13,6 +13,7 @@ generated from it instead of copied.
   Page[T]       one page of a list: items, the cursor for the next page (None at the end), the total when it is known
   FileRef       a file by content and place: sha256, size, mtime, root, rel (the path under that root)
   Judgment      one pairwise choice by a person or a model: a, b, the winner (a, b or tie), who, when, undone when
+  ApiModel      a base for an app's own response shapes: a field with a default is still required in the schema
 
 Times are timezone-aware datetimes, sent as ISO 8601 with their offset: the apps had both ISO text and float epochs,
 and only one of those reads correctly in a browser. Use `utc(epoch)` to turn a stored float into one."""
@@ -28,6 +29,14 @@ from pydantic import BaseModel, ConfigDict, Field
 def utc(epoch: float | None) -> datetime.datetime | None:
     """A float epoch (`time.time()`) as an aware UTC datetime; None stays None."""
     return None if epoch is None else datetime.datetime.fromtimestamp(epoch, datetime.UTC)
+
+
+class ApiModel(BaseModel):
+    """A base for an app's own response models. pydantic marks a field with a default as optional in the schema, so
+    the generated TypeScript gets a `?` though the server always sends it; this config makes the response schema
+    say what is sent. Use it for responses: a request body built on it has an `-Input` and an `-Output` schema."""
+
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
 
 
 class Health(BaseModel):

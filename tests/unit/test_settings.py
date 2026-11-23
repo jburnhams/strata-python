@@ -261,3 +261,27 @@ def test_a_store_given_up_front_and_bind_without_import(isolated_env):
     s.bind(other, import_file=False)
     assert other.rows == {}
     assert s.get("greeting") == "Hello"
+
+
+def test_choices_normalise_case_and_refuse_others_with_the_list(isolated_env, monkeypatch):
+    """Issue #41."""
+    from strata_python.settings import one_of
+
+    s = Settings("demo", [Setting("mode", default="mixed", choices=["mixed", "Review"], normalise=str.lower)])
+    assert s.allowed("mode") == ("mixed", "Review")
+    s.save({"mode": " MIXED "})
+    assert s.get("mode") == "mixed"
+    with pytest.raises(ValueError, match="mode: must be one of mixed, Review"):
+        s.save({"mode": "new"})
+    # normalise runs first (here lower-casing), then the choice is returned as it is spelled
+    s.save({"mode": "review"})
+    assert s.get("mode") == "Review"
+    monkeypatch.setenv("DEMO_MODE", "bogus")  # a bad environment value falls back, as for every setting
+    assert s.get("mode") == "Review"
+    with pytest.raises(ValueError, match="at least one choice"):
+        Setting("x", default="", choices=[])
+    with pytest.raises(ValueError, match="at least one choice"):
+        one_of([])
+    assert Settings("demo", [Setting("a", default="")]).allowed("a") is None
+    assert Settings("demo", [ListSetting("a")]).allowed("a") is None
+    assert Settings("demo", [Setting("a", default="x", normalise=one_of(["x", "y"]))]).allowed("a") == ("x", "y")

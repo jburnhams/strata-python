@@ -1,3 +1,4 @@
+import subprocess
 import tarfile
 import zipfile
 
@@ -149,3 +150,85 @@ def test_main_exit_code_and_report(tmp_path, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "bad.md:1: email address" in err
     assert "1 personal or machine-specific detail(s)" in err
+
+
+def test_web_source_is_scanned(tmp_path):
+    """Issue #37: a strata app keeps most of its front end in these suffixes."""
+    for name in ["Story.tsx", "api.ts", "mock.js", "theme.css", "index.html", "Intro.mdx", "icon.svg", ".env.example"]:
+        (tmp_path / name).write_text(f"// {EMAIL}\n")
+    found = public_check.scan([tmp_path])
+    assert sorted(f.where for f in found) == sorted(
+        [".env.example", "Intro.mdx", "Story.tsx", "api.ts", "icon.svg", "index.html", "mock.js", "theme.css"]
+    )
+
+
+def test_storybook_build_and_visual_baselines_are_skipped(tmp_path):
+    for folder in ["storybook-static", "tests/visual/baselines"]:
+        (tmp_path / folder).mkdir(parents=True)
+        (tmp_path / folder / "x.js").write_text(EMAIL)
+    assert public_check.scan([tmp_path]) == []
+
+
+def test_a_binary_file_with_no_suffix_is_skipped(tmp_path):
+    """Issue #37: `.coverage` after `pytest --cov` is SQLite holding absolute paths, not text to check."""
+    (tmp_path / ".coverage").write_bytes(b"SQLite format 3\x00" + HOME.encode())
+    (tmp_path / "Makefile").write_text(f"{HOME}\n")  # a text file with no suffix is still read
+    assert [f.where for f in public_check.scan([tmp_path])] == ["Makefile"]
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def test_a_git_checkout_scans_only_what_git_would_commit(tmp_path):
+    _git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_text("*.log\nout/\n")
+    (tmp_path / "run.log").write_text(f"{HOME}\n")  # ignored: tool output
+    (tmp_path / "tracked.py").write_text(f"{HOME}\n")
+    (tmp_path / "new.md").write_text(f"{HOME}\n")  # untracked but not ignored: about to be committed
+    (tmp_path / "gone.py").write_text("x\n")
+    _git(tmp_path, "add", "tracked.py", "gone.py")
+    (tmp_path / "gone.py").unlink()  # tracked, deleted from the work tree
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "built.js").write_text(f"{HOME}\n")
+    assert sorted(f.where for f in public_check.scan([tmp_path])) == ["new.md", "tracked.py"]
+    # naming an ignored folder (`strata-public-check dist`) still scans it: that is the point of naming it
+    assert [f.where for f in public_check.scan([tmp_path / "out"])] == ["built.js"]
+
+
+def test_no_git_walks_the_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(public_check.shutil, "which", lambda _name: None)
+    (tmp_path / "a.py").write_text(f"{HOME}\n")
+    assert [f.where for f in public_check.scan([tmp_path])] == ["a.py"]
+
+
+def test_repo_deny_patterns_from_pyproject(tmp_path, monkeypatch, capsys):
+    """Issue #38: shape patterns committed in the repo, reported under their kind, printed, and ignorable."""
+    monkeypatch.delenv(public_check.DENY_ENV, raising=False)
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.strata-public-check]\n"
+        'deny = ["\\\\bdate of birth\\\\b", {pattern = "\\\\b\\\\d{1,2}[- ]years?[- ]old\\\\b", kind = "age"}]\n'
+        'exclude = ["fixtures/*"]\n'
+    )
+    deny = public_check.config_deny(tmp_path)
+    assert [k for k, _ in deny] == [public_check.DENY_KIND, "age"]
+    (tmp_path / "notes.md").write_text("She is 4 years old.\nDate Of Birth: x\n")
+    marker = "strata-public-check" + ": ignore"
+    (tmp_path / "test_ages.py").write_text(f'SAMPLE = "7-year-old"  # {marker}\n')
+    (tmp_path / "fixtures").mkdir()
+    (tmp_path / "fixtures" / "kid.json").write_text('"10 years old"\n')
+    monkeypatch.chdir(tmp_path)
+    assert public_check.main(["."]) == 1
+    err = capsys.readouterr().err
+    assert "notes.md:1: age: 4 years old" in err
+    assert f"notes.md:2: {public_check.DENY_KIND}: Date Of Birth" in err
+    assert "test_ages" not in err
+    assert "fixtures" not in err
+
+
+@pytest.mark.parametrize("entry", ["1", '{kind = "age"}', '"(unclosed"'])
+def test_a_bad_repo_deny_entry_is_reported(tmp_path, monkeypatch, capsys, entry):
+    (tmp_path / "pyproject.toml").write_text(f"[tool.strata-public-check]\ndeny = [{entry}]\n")
+    monkeypatch.chdir(tmp_path)
+    assert public_check.main(["."]) == 2
+    assert "deny" in capsys.readouterr().err

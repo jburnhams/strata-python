@@ -45,3 +45,17 @@ def test_judgment_winner():
     assert j.undone_at is None
     with pytest.raises(ValidationError):
         c.Judgment(a="x", b="y", winner="x", rater="r", at=c.utc(0))
+
+
+def test_api_model_makes_defaulted_fields_required_in_the_response_schema():
+    """Issue #36: a field the server always sends must not come out optional in the generated TypeScript."""
+
+    class Plain(c.BaseModel):
+        n: int = 0
+
+    class Exact(c.ApiModel):
+        n: int = 0
+
+    assert "required" not in Plain.model_json_schema(mode="serialization")
+    assert Exact.model_json_schema(mode="serialization")["required"] == ["n"]
+    assert Exact().n == 0  # still optional to construct

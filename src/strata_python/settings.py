@@ -5,6 +5,7 @@ An app declares its settings once (`Setting`: key, default, optional normaliser)
     SETTINGS = Settings("myapp", [Setting("data_dir", default=lambda: "/srv/data", normalise=absolute_path),
                                   Setting("greeting", default="Hello", normalise=non_empty),
                                   Setting("workers", default="2", normalise=whole_between(1, 16)),
+                                  Setting("mode", default="mixed", choices=["mixed", "review", "new"]),
                                   ListSetting("source_roots", item=absolute_path)])
     SETTINGS.get("greeting")          # MYAPP_GREETING, else the file, else the default
     SETTINGS.get_int("workers")       # typed getters: get_int, get_float, get_bool, get_list
@@ -13,6 +14,11 @@ An app declares its settings once (`Setting`: key, default, optional normaliser)
 Order of precedence: environment variable (`<APP>_<KEY>`, upper-cased, or the name given), then the store, then the default. The folder holding the file is `~/.<app>`, moved
 with `<APP>_HOME`. A stored or environment value that fails its normaliser is ignored (the default applies) rather than crashing the app at start; only `save` raises.
 Values are canonical strings (a normaliser returns the one spelling it accepts), and lists of them: the file is edited by hand as well as by the app.
+
+`Settings.model()` describes them for `/api/openapi.json`: a setting with `choices` (or `normalise=one_of(...)`) is a
+`Literal` of them, so the schema has an `enum` and the web app's generated type is the union. `Settings(...,
+numbers=True)` also sends `whole_between` and `number_between` settings as JSON numbers with their range in the schema.
+It is off by default because it changes what `GET /api/settings` sends, so an app turns it on with its web app.
 
 Where the values live is a `SettingsStore`: the JSON file by default; `Settings.bind(store)` moves an app onto another one at run time (its database's `settings` table,
 `strata_python.db.settings.TableStore`), copying the file's values in once. The CLI and tests without a database keep the file."""
@@ -26,7 +32,7 @@ import tempfile
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from strata_python.oslib import file_lock
 
@@ -47,34 +53,61 @@ def absolute_path(value: str) -> str:
     return os.path.abspath(p)
 
 
-def number_between(lo: float, hi: float) -> Callable[[str], str]:
-    """Normaliser: a finite number from `lo` to `hi` (GB of memory, a budget in dollars), written the shortest way (`"8"`, `"8.5"`)."""
+@dataclass(frozen=True)
+class number_between:  # lower case: used as a normaliser function, and was one before it carried its range
+    """Normaliser: a finite number from `lo` to `hi` (GB of memory, a budget in dollars), written the shortest way
+    (`"8"`, `"8.5"`). Its range is visible, so `Settings(numbers=True)` puts it in the schema."""
 
-    def normalise(value: str) -> str:
+    lo: float
+    hi: float
+
+    def __call__(self, value: str) -> str:
         try:
             x = float(value.strip())
         except ValueError:
             raise ValueError("must be a number") from None
-        if not math.isfinite(x) or not lo <= x <= hi:
-            raise ValueError(f"must be a number from {_num(lo)} to {_num(hi)}")
+        if not math.isfinite(x) or not self.lo <= x <= self.hi:
+            raise ValueError(f"must be a number from {_num(self.lo)} to {_num(self.hi)}")
         return _num(x)
 
-    return normalise
 
+@dataclass(frozen=True)
+class whole_between:  # lower case: as number_between
+    """Normaliser: a whole number from `lo` to `hi` (job slots, a port). Its range is visible, so
+    `Settings(numbers=True)` puts it in the schema."""
 
-def whole_between(lo: int, hi: int) -> Callable[[str], str]:
-    """Normaliser: a whole number from `lo` to `hi` (job slots, a port)."""
+    lo: int
+    hi: int
 
-    def normalise(value: str) -> str:
+    def __call__(self, value: str) -> str:
         try:
             x = int(value.strip())
         except ValueError:
             raise ValueError("must be a whole number") from None
-        if not lo <= x <= hi:
-            raise ValueError(f"must be a whole number from {lo} to {hi}")
+        if not self.lo <= x <= self.hi:
+            raise ValueError(f"must be a whole number from {self.lo} to {self.hi}")
         return str(x)
 
-    return normalise
+
+@dataclass(frozen=True)
+class one_of:  # lower case: as number_between
+    """Normaliser: one of `choices`, matched without regard to case and surrounding space and returned as the choice
+    is spelled; anything else is refused with the list. `Setting(choices=...)` is the short form. `Settings.model()`
+    sees the choices and types the setting as a `Literal` of them."""
+
+    choices: tuple[str, ...]
+
+    def __init__(self, choices: Sequence[str]) -> None:
+        if not choices:
+            raise ValueError("one_of needs at least one choice")
+        object.__setattr__(self, "choices", tuple(choices))
+
+    def __call__(self, value: str) -> str:
+        v = value.strip().casefold()
+        for choice in self.choices:
+            if choice.casefold() == v:
+                return choice
+        raise ValueError(f"must be one of {', '.join(self.choices)}")
 
 
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -120,10 +153,18 @@ def _identity(value: str) -> str:
 
 @dataclass(frozen=True)
 class Setting:
+    """One setting. `normalise` turns a value into its one spelling or raises ValueError; `choices` limits it to a
+    fixed set (`one_of`, applied after `normalise`), which `set` shows and the API schema types as an enum."""
+
     key: str
     default: str | Callable[[], str]
     normalise: Callable[[str], str] = _identity
     env: str | None = None  # environment variable; default `<APP>_<KEY>`
+    choices: Sequence[str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.choices is not None:
+            object.__setattr__(self, "choices", one_of(self.choices).choices)  # a tuple, and refuses an empty list
 
     def default_value(self) -> str:
         d = self.default
@@ -133,7 +174,15 @@ class Setting:
         """A stored, environment or saved value as its canonical string; ValueError when it is not acceptable."""
         if not isinstance(raw, str):
             raise ValueError("must be text")  # str(5) would pass a hand-edited number off as a deliberate string
-        return self.normalise(raw)
+        v = self.normalise(raw)
+        return v if self.choices is None else one_of(self.choices)(v)
+
+    def allowed(self) -> tuple[str, ...] | None:
+        """The fixed set of values, from `choices` or a `one_of` normaliser, else None."""
+        if self.choices is not None:
+            return tuple(self.choices)
+        n = self.normalise
+        return n.choices if isinstance(n, one_of) else None
 
 
 def _no_list() -> list[str]:
@@ -231,11 +280,19 @@ class JsonFileStore:
 
 class Settings:
     def __init__(
-        self, app: str, settings: Sequence[AnySetting], *, prefix: str | None = None, store: SettingsStore | None = None
+        self,
+        app: str,
+        settings: Sequence[AnySetting],
+        *,
+        prefix: str | None = None,
+        store: SettingsStore | None = None,
+        numbers: bool = False,
     ) -> None:
         """`prefix` names the environment variables (`<PREFIX>_HOME`, `<PREFIX>_<KEY>`); default the upper-cased app name with `-` as `_`.
-        Give it when an app's variables already have a short form that deployed services use. `store` is where values live (default: the JSON file)."""
+        Give it when an app's variables already have a short form that deployed services use. `store` is where values live (default: the JSON file).
+        `numbers=True` makes `model()` type `whole_between`/`number_between` settings as numbers (see the module notes)."""
         self.app = app
+        self.numbers = numbers
         self.prefix = prefix or app.upper().replace("-", "_")
         self._by_key: dict[str, AnySetting] = {s.key: s for s in settings}
         self.file = JsonFileStore(self.path)
@@ -308,6 +365,11 @@ class Settings:
         s = self._by_key[key]
         return s.sep.join(v) if isinstance(s, ListSetting) and isinstance(v, list) else cast("str", v)
 
+    def allowed(self, key: str) -> tuple[str, ...] | None:
+        """The values setting `key` may take, when it has a fixed set (`choices` or `one_of`), else None."""
+        s = self._by_key[key]
+        return s.allowed() if isinstance(s, Setting) else None
+
     def get_list(self, key: str) -> list[str]:
         s = self._by_key[key]
         if not isinstance(s, ListSetting):
@@ -327,17 +389,29 @@ class Settings:
         return {k: self.value(k) for k in self._by_key}
 
     def model(self) -> type[Any]:
-        """The settings as a pydantic model: a field per setting (`str`, or `list[str]` for a `ListSetting`), named
-        `<App>Settings`. `web.base_app` declares it as the settings routes' response, so `/api/openapi.json` describes
-        each setting and a web app's types can be generated from it. Built on each call; pydantic is imported here, so
-        a CLI that only reads settings does not load it."""
-        from pydantic import create_model
+        """The settings as a pydantic model, named `<App>Settings`: a field per setting, `str` (a `Literal` of its
+        choices when it has them; with `numbers=True`, `int` or `float` with its range for `whole_between` and
+        `number_between`), or `list[str]` for a `ListSetting`. `web.base_app` declares it as the settings routes'
+        response, so `/api/openapi.json` describes each setting and a web app's types can be generated from it. Built
+        on each call; pydantic is imported here, so a CLI that only reads settings does not load it."""
+        from pydantic import Field, create_model
 
-        fields: dict[str, Any] = {
-            k: (list[str] if isinstance(s, ListSetting) else str, ...) for k, s in self._by_key.items()
-        }
+        fields: dict[str, Any] = {k: self._field(s, Field) for k, s in self._by_key.items()}
         name = "".join(p.capitalize() for p in re.split(r"[^0-9A-Za-z]+", self.app) if p) + "Settings"
         return create_model(name, **fields)
+
+    def _field(self, s: AnySetting, field: Callable[..., Any]) -> tuple[Any, Any]:
+        if isinstance(s, ListSetting):
+            return list[str], ...
+        allowed = s.allowed()
+        if allowed is not None:
+            return Literal[allowed], ...  # pyright: ignore[reportInvalidTypeForm] - a Literal built at run time  # ty: ignore[invalid-type-form]
+        n = s.normalise
+        if self.numbers and isinstance(n, whole_between):
+            return int, field(..., ge=n.lo, le=n.hi)
+        if self.numbers and isinstance(n, number_between):
+            return float, field(..., ge=n.lo, le=n.hi)
+        return str, ...
 
     def folder(self, key: str) -> str:
         """The setting `key` as a folder that exists (created when asked for)."""

@@ -13,6 +13,7 @@ assets are relative (Vite `base: './'`)."""
 import argparse
 import concurrent.futures
 import datetime
+import json
 import os
 import platform
 import shutil
@@ -82,7 +83,8 @@ def base_app(
             return settings.all()
 
         @app.put("/api/settings", response_model=shape)
-        def put_settings(changes: dict[str, str | list[str] | None]) -> dict[str, str | list[str]]:  # pyright: ignore[reportUnusedFunction]
+        # numbers too: with Settings(numbers=True) the web app sends back the numbers GET gave it; save() takes str(n)
+        def put_settings(changes: dict[str, str | int | float | list[str] | None]) -> dict[str, str | list[str]]:  # pyright: ignore[reportUnusedFunction]
             try:
                 settings.save(changes)
             except (KeyError, ValueError) as e:
@@ -90,6 +92,13 @@ def base_app(
             return settings.all()
 
     return app
+
+
+def openapi_text(app: FastAPI) -> str:
+    """The app's OpenAPI schema as the text an app commits for strata-react's `strata-api-types`: sorted keys, indent 1,
+    non-ASCII kept, a final newline, so two runs and a git diff compare like with like. Nothing in it comes from the
+    machine or the moment; `base_app`'s version is in `info.version`, so a release changes the file as it should."""
+    return json.dumps(app.openapi(), indent=1, sort_keys=True, ensure_ascii=False) + "\n"
 
 
 def source_commit(path: str) -> str | None:

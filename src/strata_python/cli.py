@@ -5,6 +5,7 @@
                checks=[Check("ffmpeg", program("ffmpeg"))])
     add_set(sub, SETTINGS)
     add_serve(sub, lambda host, port: web.serve(create_app(), ["--host", host, "--port", str(port)]), default_port=8360)
+    add_openapi(sub, create_app)                     # myapp openapi [-o web/openapi.json | -] [--check]
     args = parser.parse_args(argv); return args.fn(args)
 
 Each command sets `fn` on its parser; the handler returns the exit code."""
@@ -15,9 +16,13 @@ import shutil
 import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any, Literal
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
 
 from strata_python.settings import Settings
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 Sub = Any  # argparse's subparsers object is a private generic type; only add_parser is used
 
@@ -128,7 +133,8 @@ def add_set(sub: Sub, settings: Settings) -> None:
                 settings.save({args.key: None if args.value == "default" else args.value})
             except ValueError as e:
                 sys.exit(str(e))
-        print(f"{args.key} = {settings.get(args.key)}")
+        allowed = settings.allowed(args.key)
+        print(f"{args.key} = {settings.get(args.key)}" + (f"  (one of: {', '.join(allowed)})" if allowed else ""))
         return 0
 
     p = sub.add_parser("set", help=f'show or change a setting ({", ".join(settings.keys)}); value "default" resets it')
@@ -148,3 +154,40 @@ def add_serve(sub: Sub, run: Callable[[str, int], None], *, default_port: int) -
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=default_port)
     p.set_defaults(fn=cmd_serve)
+
+
+def add_openapi(sub: Sub, create_app: "Callable[[], FastAPI]", *, default: Path = Path("web/openapi.json")) -> None:
+    """`openapi [-o PATH|-] [--check]`: write the app's schema (`web.openapi_text`) to `default`, another path or
+    stdout, for strata-react's `strata-api-types`, which reads the file so CI needs no server. `--check` writes
+    nothing and exits 1 when the file differs, so a Python-only CI job can gate it too. The app is built only when
+    the command runs, so `create_app` may be slow."""
+
+    def cmd_openapi(args: argparse.Namespace) -> int:
+        from strata_python import web  # here, so the app's other commands do not import FastAPI
+
+        text = web.openapi_text(create_app())
+        out: str = args.output
+        if out == "-":
+            if args.check:
+                sys.exit("--check compares a file; give -o PATH")
+            sys.stdout.write(text)
+            return 0
+        path = Path(out)
+        if args.check:
+            current = path.read_text(encoding="utf-8") if path.is_file() else None
+            if current == text:
+                return 0
+            print(
+                f"{path} is {'missing' if current is None else 'out of date'}: run the openapi command", file=sys.stderr
+            )
+            return 1
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as f:  # LF on Windows too, or the check never agrees
+            f.write(text)
+        print(f"wrote {path}")
+        return 0
+
+    p = sub.add_parser("openapi", help=f"write the API schema for the web app's types (default {default.as_posix()})")
+    p.add_argument("-o", "--output", default=str(default), help='file to write, or "-" for stdout')
+    p.add_argument("--check", action="store_true", help="write nothing; exit 1 if the file differs")
+    p.set_defaults(fn=cmd_openapi)
