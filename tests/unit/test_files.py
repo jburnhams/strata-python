@@ -98,7 +98,8 @@ def test_a_reader_never_sees_a_half_written_file(tmp_path):
             "bad=0\nend=time.time()+3\n"
             "while time.time()<end:\n"
             "    try:\n        d=json.load(open(sys.argv[1]))\n"
-            "    except ValueError:\n        bad+=1\n"
+            "    except PermissionError:\n        continue\n"  # Windows refuses an open mid-replace: not a half read
+            "    except ValueError:\n        bad+=1\n        continue\n"
             "    if d.get('n')==199: break\n"
             "print(bad)",
             str(path),
