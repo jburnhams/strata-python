@@ -6,7 +6,12 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ### Added
 
-- `strata_python.mediatime`: exact time for media. `rational(...)` (seconds as a `Fraction` from an int, "p/q" or decimal text, a Decimal, or a float by its shortest repr), `Rate` (`parse("30000/1001")`, `frame_at`, `time_of`, `snap`), `Span` (half-open `[start, end)`: `duration`, `in`, `&`, `overlaps` (an empty span overlaps nothing), `overlaps` (an empty span overlaps nothing), `shift`, `frames(rate)`), `Piece` and `TimeMap` (an edit's output time to its sources and back: `sequence(ranges)`, `to_source(t)`, `to_output(source, t)`), all with exact JSON (`text`, `to_json`, `from_json`).
+- `strata_python.mediatime`: exact time for media. `rational(...)` (seconds as a `Fraction` from an int, "p/q" or decimal text, a Decimal, or a float by its shortest repr), `Rate` (`parse("30000/1001")`, `frame_at`, `time_of`, `snap`), `Span` (half-open `[start, end)`: `duration`, `in`, `&`, `overlaps` (an empty span overlaps nothing), `shift`, `frames(rate)`), `Piece` and `TimeMap` (an edit's output time to its sources and back: `sequence(ranges)`, `to_source(t)`, `to_output(source, t)`), all with exact JSON (`text`, `to_json`, `from_json`).
+- `web.add_system(..., extra_model=AppNumbers)` (or `extra` annotated `-> AppNumbers`, which may return the model): the route's response is `<App>SystemInfo`, `SystemInfo` plus the app's fields, so they are in `/api/openapi.json` and the generated types (#46). Replace the hand-written `Schema<'SystemInfo'> & {...}` with `Schema<'<App>SystemInfo'>`. Without a model, `extra` works as before.
+
+### Changed
+
+- The response contracts (`Page`, `Health`, `SystemInfo`, `Folder`, `ServiceStatus`, `ErrorBody`, `Task`, `Progress`) are built on `ApiModel`, so a field with a default is required in the response schema: `Page.next` is `string | null` in the generated types, not `next?` (#45). Drop the app's `page.next ?? null` and similar fill-ins. An app that takes one of them as a request body gets `-Input` and `-Output` schemas for it.
 
 ## 0.2.6 (2026-11-23)
 

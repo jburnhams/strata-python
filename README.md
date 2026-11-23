@@ -140,6 +140,8 @@ web.add_system(
 )  # GET /api/system, a SystemInfo
 ```
 
+The app's own `/api/system` fields go in `extra=`, a function returning a mapping or a model. Give their model (`extra_model=AppNumbers`, or annotate the function `-> AppNumbers`) and the route's response is `<App>SystemInfo`, `SystemInfo` plus those fields, so the web app's type is `Schema<'MyappSystemInfo'>` with nothing added by hand.
+
 Delete the app's `guard()` (or each route's `try/except` raising `HTTPException`), passing its own exceptions as `add_error_handlers(app, {BookLocked: 423})`, and its `/api/system` route. Give `base_app` the same `commit=` so `/api/health` says which source the server runs. Declare a route's answer with a shape from `strata_python.contracts` (`response_model=Page[Task]`) where the app already returns that shape, so the web app's types can come from `/api/openapi.json`.
 
 Delete the app's own `/api/health` and `/api/settings` routes, its `/assets` mount, SPA fallback, `with_base` and `static_file` copies and its `uvicorn.run` wrapper. `web.serve(app, argv, default_port=...)` replaces the last of these. For health fields of the app's own, pass `health=lambda: {"gpu": gpu_name()}`: they follow `ok` and `version`, and may set `ok` to false. It runs on every request, so keep it cheap.
