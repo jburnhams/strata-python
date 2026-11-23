@@ -37,6 +37,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from fractions import Fraction
@@ -177,9 +178,9 @@ def thumbnails(
     vf = ",".join([*_deinterlace(fields), pick, _scale(height)])
     named: str = os.fspath(folder)
     target = os.path.abspath(named)
-    part = f"{target}.part"
-    shutil.rmtree(part, ignore_errors=True)
-    os.makedirs(part)
+    parent, name = os.path.split(target)
+    os.makedirs(parent, exist_ok=True)
+    part = tempfile.mkdtemp(prefix=f".{name}.", suffix=".part", dir=parent)  # one per call: two runs never share one
     try:
         media.ffmpeg(
             [

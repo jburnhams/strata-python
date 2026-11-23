@@ -202,3 +202,26 @@ def test_thumbnails_reach_the_last_stretch_and_not_closer_than_frames(clips, tmp
     assert [t.time for t in derive.thumbnails(clips["progressive"], tmp_path / "t", every=2)] == [0, 2]
     with pytest.raises(ValueError, match="closer than the frames"):
         derive.thumbnails(clips["progressive"], tmp_path / "t", every=Fraction(1, 50))
+
+
+@needs_ffmpeg
+def test_two_thumbnail_runs_into_one_folder_do_not_share_a_staging_folder(clips, tmp_path):
+    import threading
+
+    folder = tmp_path / "thumbs"
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            derive.thumbnails(clips["silent"], folder, every=1, interlace="tff")
+        except BaseException as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=run) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(os.listdir(folder)) == ["000000.jpg", "000001.jpg", "000002.jpg"]
+    assert sorted(os.listdir(tmp_path)) == ["thumbs"]
+    assert all(isinstance(e, OSError) for e in errors)  # a loser of the final rename, never a mixed folder
