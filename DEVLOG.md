@@ -2,6 +2,16 @@
 
 Why each change was made and which files it touched, newest day first. For what changed in each release, as an app sees it, read [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-23
+
+**Issues #27 and #28: `rasterise` at the scan's size, `lower_priority` sets the nice value (branch `claude/project-thread-u9wgtq`)**
+
+Jonathan asked for the open issues to be worked through. Both were reported from apps that had worked around them.
+
+- `src/strata_python/oslib.py`: `lower_priority` used `os.nice`, which adds to the current value. A macOS runner starts at -10, so listory's worker ended at 9 and its tools did not get idle priority (#28). It now reads the current value and `setpriority`s to `nice` when that is higher, as the docstring always said.
+- `src/strata_python/pages/render.py`: pypdfium2 sizes the bitmap with `ceil(points * scale)`. A 2660 px page at 500 dpi is 383.04 pt, stored a hair over, so it came back 2661 px (#27; strata-models#75 pasted it onto a white canvas). `rasterise` now crops to `round(points * scale)`; ceil is at most a pixel over round, so this only ever trims a sliver. pdfium's page sizes already follow `/Rotate`, so no swap is needed.
+- `tests/unit/test_oslib.py`: the nice value set absolutely from 5, kept from 15, and reaching 19 from -10. Each fails on the old code. Starting below 0 needs root, so that last case skips with its reason on CI (not root) and runs in a root container. `tests/unit/test_pages.py`: three scan sizes at 500 dpi and at half the dpi, and a rotated PDF.
+
 ## 2026-11-14
 
 **Every queue job in a supervised process, from a pool that is reused: listory's supervisor in `oslib` and `tasks.child` (branch `claude/project-thread-aefumh`)**

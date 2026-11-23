@@ -1,6 +1,7 @@
 """strata_python.pages: the page description round-trips and refuses what cannot be drawn; the renderer's PDF, drawn
 back by pdfium (no mocks), puts ink where the description says and reads back as the description's text."""
 
+import io
 import json
 import os
 from pathlib import Path
@@ -249,3 +250,24 @@ def test_tracking_is_the_advance_on_the_page_even_when_scaled():
     i_left = ink(img.crop((hh[2] + 1, 0, 1200, 600)))[0] + hh[2] + 1
     gap_px = 0.5 * 10 * 300 / 72
     assert abs((i_left - hh[2]) - gap_px) <= 4
+
+
+@pytest.mark.parametrize(("width", "height"), [(2660, 4140), (2660, 4056), (2481, 3509)])
+def test_a_page_at_its_own_dpi_comes_back_the_scan_size(width, height):
+    """Issue #27: points that are not whole at 500 dpi (383.04 pt) made pdfium round the raster up a pixel."""
+    pdf = render(Page(width, height, 500))
+    assert rasterise(pdf, dpi=500).size == (width, height)
+    if width % 2 == 0 and height % 2 == 0:  # an odd size is half a pixel at half the dpi, which either way is right
+        assert rasterise(pdf, dpi=250).size == (width // 2, height // 2)
+
+
+def test_a_rotated_page_comes_back_turned_and_at_its_rounded_size():
+    """A PDF from elsewhere may carry /Rotate; the rounded size follows the turn, as pdfium's own does."""
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(render(Page(2660, 4140, 500)))
+    doc[0].set_rotation(90)
+    out = io.BytesIO()
+    doc.save(out)
+    doc.close()
+    assert rasterise(out.getvalue(), dpi=500).size == (4140, 2660)

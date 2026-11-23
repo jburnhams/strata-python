@@ -244,14 +244,22 @@ def page_count(pdf: bytes) -> int:
 
 
 def rasterise(pdf: bytes, page: int = 0, dpi: float = 300.0) -> Image.Image:
-    """One page of a PDF as a greyscale picture at `dpi` (the scan's dpi gives the scan's size in pixels), white paper."""
+    """One page of a PDF as a greyscale picture at `dpi` (the scan's dpi gives the scan's size in pixels), white paper.
+
+    The picture is the page's size in points times `dpi / 72`, rounded to whole pixels. pdfium rounds up, so a scan
+    page 2660 px wide at 500 dpi (383.04 pt, stored a hair over) came back 2661 px (issue #27) and an ink comparison
+    against the scan had to pad or crop; the sliver of a pixel past the rounded edge is cut off here instead."""
     doc = _document(pdf)
     try:
         if not 0 <= page < len(doc):
             raise PageError(f"no page {page} in a PDF of {len(doc)}")
         p = doc[page]
-        img = p.render(scale=dpi / 72.0).to_pil().convert("L")
+        scale = dpi / 72.0
+        img = p.render(scale=scale).to_pil().convert("L")
+        w, h = round(p.get_width() * scale), round(p.get_height() * scale)  # pdfium's sizes already follow /Rotate
         p.close()
+        if img.size != (w, h):  # pdfium's ceil is at most one pixel over round, so this only ever trims
+            img = img.crop((0, 0, min(img.width, w), min(img.height, h)))
         return img
     finally:
         doc.close()
