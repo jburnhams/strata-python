@@ -103,6 +103,13 @@ def test_ffmpeg_progress_reports_seconds_written(clip, tmp_path):
     assert max(seen) == pytest.approx(2.0, abs=0.2)
     with pytest.raises(media.MediaError, match="ffmpeg failed"):
         media.ffmpeg(["-i", tmp_path / "missing.mkv", tmp_path / "x.wav"], progress=seen.append)
+    raw = media.ffmpeg(["-i", clip, "-vn", "-t", "1", "-ac", "1", "-ar", "8000", "-f", "s16le", "-"])
+    fed: list[float] = []
+    media.ffmpeg(
+        ["-f", "s16le", "-ar", "8000", "-ac", "1", "-i", "-", tmp_path / "fed.wav"], input=raw, progress=fed.append
+    )
+    assert media.duration(tmp_path / "fed.wav") == pytest.approx(1.0, abs=0.05)  # the input reached ffmpeg
+    assert fed
 
 
 @needs_ffmpeg

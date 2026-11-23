@@ -20,7 +20,7 @@ Rules:
 - Requests to one host are spaced `min_interval` apart, across threads (each takes the next free slot, so ten threads
   do not all fire after one gap). `throttle_file=` spaces them across processes as well (several workers, a CLI beside
   the server), through a lock file.
-- 429 and 503 wait for the server's Retry-After (seconds or an HTTP date), capped at `max_wait`, else 1, 2, 4... s. A host
+- 429 (any request) and 503 (an idempotent one) wait for the server's Retry-After (seconds or an HTTP date), capped at `max_wait`, else 1, 2, 4... s. A host
   still saying 429 after `attempts` is left alone for `cool_down` seconds: calls return a `limited` reply at once instead
   of making every lookup wait out the limit again.
 - 500, 502, 504 and network errors (refused, reset, timed out) are retried only for an idempotent request (GET, HEAD,
@@ -32,6 +32,7 @@ Rules:
 - Bodies over `max_bytes` are cut and the reply carries `error="body larger than ..."`, so one huge answer cannot fill
   memory.
 - With `cache=DiskCache(...)`, a request with `cache_s=` is answered from disk while its copy is younger than that.
+  The key is the method, URL, body and the headers sent (so different credentials never share an answer), or `cache_key=`.
   Statuses in `cache_status` (200 and 404 by default: "not there" is an answer worth keeping) are stored.
 - `observe(reply, attempt)` sees every attempt (listory's provider log, a test's record).
 
@@ -236,7 +237,9 @@ class Http:
             hdrs.setdefault("Content-Type", "application/json")
         key = None
         if cache_s is not None and self.cache is not None:
-            key = cache_key or json.dumps([method, url, body.decode(errors="replace") if body else None])
+            # The headers are part of the key, so two callers with different credentials never share an answer.
+            sent = sorted((k.lower(), v) for k, v in hdrs.items() if k.lower() != "user-agent")
+            key = cache_key or json.dumps([method, url, body.decode(errors="replace") if body else None, sent])
             hit = self._from_cache(self.cache, url, key, cache_s)
             if hit is not None:
                 return hit
@@ -249,7 +252,7 @@ class Http:
             reply = self._once(method, url, body, hdrs, self.timeout if timeout is None else timeout)
             if self.observe:
                 self.observe(reply, attempt)
-            if reply.status == 429 or (reply.status == 503 and "retry-after" in reply.headers):
+            if reply.status == 429 or (safe and reply.status == 503 and "retry-after" in reply.headers):
                 reply.limited = reply.status == 429
                 wait = retry_after(reply.headers, attempt, max_wait=self.max_wait)
             elif safe and (reply.status in RETRY_STATUS or reply.status == 0):

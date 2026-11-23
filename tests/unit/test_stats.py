@@ -106,3 +106,11 @@ def test_holm():
     assert math.isnan(out[1])
     assert out[2] == pytest.approx(0.02)
     assert stats.holm([0.9, 0.8]) == [1.0, 1.0]  # 2 x 0.8 capped at 1, and never below an earlier one
+
+
+def test_side_converges_when_the_strengths_start_equal():
+    """Each ordering of two names: nine wins for the side shown first, one for the other. Equal strengths, odds 9:1."""
+    votes = [("x", "y", "a")] * 9 + [("x", "y", "b")] + [("y", "x", "a")] * 9 + [("y", "x", "b")]
+    fit = stats.bradley_terry(votes, side=True, prior=0)
+    assert fit.strengths == pytest.approx({"x": 1.0, "y": 1.0})
+    assert fit.side == pytest.approx(9.0, rel=1e-3)

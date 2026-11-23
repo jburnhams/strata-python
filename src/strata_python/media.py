@@ -23,6 +23,7 @@ tools on a tiny generated file."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -242,14 +243,21 @@ def ffmpeg(
         if r.returncode:
             raise MediaError(f"ffmpeg failed (exit {r.returncode}): {_tail(r.stderr)}")
         return r.stdout
-    return _with_progress([*base, "-progress", "pipe:1", "-nostats", *cmd[len(base) :]], progress, timeout, cwd)
+    return _with_progress([*base, "-progress", "pipe:1", "-nostats", *cmd[len(base) :]], progress, timeout, cwd, input)
 
 
-def _with_progress(cmd: list[str], progress: Callable[[float], None], timeout: float | None, cwd: str | None) -> bytes:
+def _with_progress(
+    cmd: list[str], progress: Callable[[float], None], timeout: float | None, cwd: str | None, data: bytes | None
+) -> bytes:
     """Read `-progress pipe:1` lines (`out_time_us=...`) and report seconds; stderr is drained on a thread so a chatty
     ffmpeg cannot fill its pipe and stall."""
     proc = subprocess.Popen(  # noqa: S603 - our own ffmpeg command
-        cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd
+        cmd,
+        stdin=subprocess.DEVNULL if data is None else subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
     )
     out, errs = proc.stdout, proc.stderr
     if out is None or errs is None:  # pragma: no cover - both are pipes above
@@ -257,6 +265,16 @@ def _with_progress(cmd: list[str], progress: Callable[[float], None], timeout: f
     err: list[str] = []
     drain = threading.Thread(target=lambda: err.append(errs.read()), daemon=True)
     drain.start()
+    if data is not None and proc.stdin is not None:  # fed on a thread: ffmpeg reads input while it writes progress
+        feed_pipe = proc.stdin
+
+        def feed() -> None:
+            with contextlib.suppress(BrokenPipeError, OSError, ValueError):
+                feed_pipe.buffer.write(data)
+            with contextlib.suppress(OSError):
+                feed_pipe.close()
+
+        threading.Thread(target=feed, daemon=True).start()
     fired = threading.Event()
 
     def kill() -> None:

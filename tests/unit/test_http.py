@@ -313,3 +313,21 @@ def test_an_error_whose_body_cannot_be_read_still_reports_the_status():
     r = Http(UA, min_interval=0, attempts=1, opener=opener).get("https://example.org/x")
     assert r.status == 500
     assert "Server Error" in r.error
+
+
+def test_503_on_a_post_is_not_replayed_even_with_retry_after(http_server):
+    http_server.route("POST", "/w", status=503, headers={"Retry-After": "1"})
+    r = client(min_interval=0).post(http_server.url + "/w", json_body={})
+    assert r.status == 503
+    assert len(http_server.requests) == 1  # a 503 does not say the write was not applied
+
+
+def test_cache_keeps_answers_for_different_credentials_apart(http_server, tmp_path):
+    http_server.route("GET", "/me", {"user": "first"}, once=True)
+    http_server.route("GET", "/me", {"user": "second"}, once=True)
+    cache = DiskCache(tmp_path)
+    a = client(min_interval=0, cache=cache, headers={"Authorization": "Bearer one"})
+    b = client(min_interval=0, cache=cache, headers={"Authorization": "Bearer two"})
+    assert a.get(http_server.url + "/me", cache_s=60).json() == {"user": "first"}
+    assert b.get(http_server.url + "/me", cache_s=60).json() == {"user": "second"}
+    assert a.get(http_server.url + "/me", cache_s=60).cached

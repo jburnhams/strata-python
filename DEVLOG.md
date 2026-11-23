@@ -17,6 +17,7 @@ The owner asked for the rest of the shared modules, prioritised by how many apps
 - `tests/unit/test_files.py`, `test_http.py`, `test_media.py`, `test_images.py`, `test_stats.py` **new**: real files (a reader process that never sees a half-written file), the `http_server` fixture for every HTTP rule (one fake opener, for a reset while reading an error body), the real ffmpeg on a generated two-second clip with chapters, real pictures with EXIF orientation, and Bradley-Terry recovering the strengths it simulated from.
 - `.github/workflows/ci.yml`: installs ffmpeg on Linux, macOS and Windows and sets `STRATA_TEST_FFMPEG=1`, so the media tests fail rather than skip in CI. Elsewhere they skip with that reason.
 - README (module table, step 6c), AGENTS.md layout, CHANGELOG.
+- From the Codex review of PR #34, each with a test that fails without the fix: a 503 with Retry-After is retried only for an idempotent request (it does not say the write was not applied, unlike a 429); the cache key includes the headers sent, so two callers with different credentials never share a cached answer; `bradley_terry(side=True)` stops only when the side advantage has settled too (equal strengths at the start stopped it after one step); `ffmpeg(input=..., progress=...)` now feeds the input instead of dropping it.
 
 **Issues #27 and #28: `rasterise` at the scan's size, `lower_priority` sets the nice value (branch `claude/project-thread-u9wgtq`)**
 

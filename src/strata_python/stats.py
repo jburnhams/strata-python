@@ -96,11 +96,12 @@ def bradley_terry(
         q = {n: wins[n] / denom[n] for n in names}
         g = math.exp(sum(math.log(x) for x in q.values()) / len(q))
         new = {n: x / g for n, x in q.items()}
+        old_h = h
         if side:
             h = (first_score + prior) / (
                 sum(n * new[a] / (h * new[a] + new[b]) for (a, b), (n, _) in agg.items()) + prior
             )
-        done = all(abs(new[n] - p[n]) <= 1e-9 * max(1.0, p[n]) for n in names)
+        done = abs(h - old_h) <= 1e-9 * h and all(abs(new[n] - p[n]) <= 1e-9 * max(1.0, p[n]) for n in names)
         p = new
         if done:
             break
