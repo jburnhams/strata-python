@@ -357,3 +357,20 @@ def test_an_unresolvable_return_annotation_means_no_model():
 
     assert web._returned_model(broken) is None
     assert web._returned_model(None) is None
+
+
+def test_system_extra_model_with_an_alias(live_app):
+    from pydantic import Field
+
+    from strata_python.contracts import ApiModel
+
+    class Queue(ApiModel):
+        queued: int = Field(alias="queueLength")
+
+    def queue() -> Queue:
+        return Queue(queueLength=3)
+
+    app = web.base_app("demo", "1")
+    web.add_system(app, "1", extra=queue)
+    with live_app(app) as base:
+        assert json.loads(get(base + "/api/system")[1])["queueLength"] == 3

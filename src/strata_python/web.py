@@ -249,7 +249,8 @@ def add_system(
 
     def own() -> dict[str, object]:
         got: Mapping[str, object] | BaseModel = extra() if extra else {}
-        return got.model_dump() if isinstance(got, BaseModel) else dict(got)
+        # by alias: the merged model validates by the same keys the app's model does (review finding)
+        return got.model_dump(by_alias=True) if isinstance(got, BaseModel) else dict(got)
 
     @app.get("/api/system", response_model=shape)
     def get_system() -> SystemInfo:  # pyright: ignore[reportUnusedFunction]
