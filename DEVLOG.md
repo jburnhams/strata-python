@@ -4,6 +4,16 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-23
 
+**`wav.read_wav` and `testing.sine_wav`, from strata-voice's studio (branch `claude/project-thread-cvjjmf`)**
+
+The owner asked for the recording studio's common code to live in the shared libraries. strata-voice checked each uploaded take's header with `wave` before keeping it; any app that takes recorded speech (or imports old recordings) needs the same check and the same test WAVs, so both move here. strata-react gets the browser half (capture, WAV writer, level meter) in the same change.
+
+- `src/strata_python/wav.py` (**new**): `read_wav`, `WavInfo`, `WavError`, `SPEECH_RATE`. Only the header is read; nothing is decoded, so the cost does not grow with the file. The limits are keyword arguments with the speech defaults (mono, 16/24-bit, 16 kHz) because each app's are its own. A correction to the studio's copy: it wrote `{e or 'it ends early'}`, but an exception instance is always truthy, so a truncated file read "()" instead of "it ends early"; here it is `str(e) or ...`, with a test.
+- Review fixes (Codex on #50): a path is opened, not read whole, and the last frame is looked for, because `wave` takes `getnframes()` from the data chunk's declared size: a one-second WAV cut to its 44-byte header passed as one second long. Both checks cost the same at any length.
+- `src/strata_python/testing.py`: `sine_wav` (8, 16, 24 and 32-bit, any channel count, silence at amplitude 0).
+- `tests/unit/test_wav.py` (**new**): every refusal sentence, bytes and paths, a chunk that claims more than follows, and the tone's amplitude.
+- `README.md`, `AGENTS.md`, `CHANGELOG.md`: the module row, the layout line and the Unreleased entry.
+
 **Provenance for model results: `run_with_provenance`, `role_settings` (branch `claude/project-thread-3e79cp`)**
 strata-models issue #103: strata-reels stores every analysis result with the model, version and config that made it, and keys its cache on them. `role_model()` gives only the key, which stays the same when the service's models.toml changes a model's options, and `run()` dropped which model served the job. strata-models now records `options` and `settings_hash` on each job when it starts and shows `settings_hash` per role in `/api/registry`; this is the typed client side.
 - `src/strata_python/clients/models.py`: `Provenance` (`from_job`), `run_with_provenance`, `RoleSettings`, `role_settings`. New names rather than a flag on `run`/`role_model`, so their return types stay exact and existing callers are untouched.
