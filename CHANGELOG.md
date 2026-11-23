@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.5 (2026-11-23)
+
 ### Added
 
 - `strata_python.files`: `atomic_path(path)` (a temp path beside the file, keeping its extension so ffmpeg can write to it, replaced on success and removed on error), `atomic_open`, `write_text_atomic`, `write_bytes_atomic`, `write_json_atomic(path, data, indent=1)`, `read_json(path, default)` (missing or broken file: the default), `sha256`/`sha256_hex`, `quick_fingerprint` (size and both ends of a big file), `stat_key(path, *extra)`, `inside(root, path)` (a path from a request, refused with `ValueError` if it leaves the root) and `DiskCache` (bytes or `json(key, fetch, max_age_s)` on disk with an age). Replace the app's `tmp` + `os.replace` writes, its sha256 helpers and its response caches.
