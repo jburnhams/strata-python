@@ -6,7 +6,7 @@ Why each change was made and which files it touched, newest day first. For what 
 
 **Issues #27 and #28: `rasterise` at the scan's size, `lower_priority` sets the nice value (branch `claude/project-thread-u9wgtq`)**
 
-Jonathan asked for the open issues to be worked through. Both were reported from apps that had worked around them.
+The two open issues, both reported from apps that had worked around them.
 
 - `src/strata_python/oslib.py`: `lower_priority` used `os.nice`, which adds to the current value. A macOS runner starts at -10, so listory's worker ended at 9 and its tools did not get idle priority (#28). It now reads the current value and `setpriority`s to `nice` when that is higher, as the docstring always said.
 - `src/strata_python/pages/render.py`: pypdfium2 sizes the bitmap with `ceil(points * scale)`. A 2660 px page at 500 dpi is 383.04 pt, stored a hair over, so it came back 2661 px (#27; strata-models#75 pasted it onto a white canvas). `rasterise` now crops to `round(points * scale)`; ceil is at most a pixel over round, so this only ever trims a sliver. pdfium's page sizes already follow `/Rotate`, so no swap is needed.
