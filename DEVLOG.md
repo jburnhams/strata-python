@@ -4,6 +4,13 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-23
 
+**Provenance for model results: `run_with_provenance`, `role_settings` (branch `claude/project-thread-3e79cp`)**
+strata-models issue #103: strata-reels stores every analysis result with the model, version and config that made it, and keys its cache on them. `role_model()` gives only the key, which stays the same when the service's models.toml changes a model's options, and `run()` dropped which model served the job. strata-models now records `options` and `settings_hash` on each job when it starts and shows `settings_hash` per role in `/api/registry`; this is the typed client side.
+- `src/strata_python/clients/models.py`: `Provenance` (`from_job`), `run_with_provenance`, `RoleSettings`, `role_settings`. New names rather than a flag on `run`/`role_model`, so their return types stay exact and existing callers are untouched.
+- `src/strata_python/testing.py`: `FakeModels.options` (role -> load options); a job records `model`, `options` (merged with the submit's own) and `settings_hash` when it starts, `null` while queued as on the service; the registry's roles carry `settings_hash`.
+- `tests/unit/test_clients_models.py`: the result with its provenance, the hash changing when the options change under the same key, a variant's options, a row from an older service.
+- README (clients row), CHANGELOG.
+
 **Issues #45 and #46: the shared responses and `/api/system`'s own fields, exact in the schema (branch `claude/project-thread-xzb4kc`)**
 
 The owner asked for the two issues raised while moving python-app-template onto 0.2.6. PR #42 had left the contracts on `BaseModel` so apps' generated types would not move; the template showed the move is what apps want (its `page.next ?? null`), and a field turning from optional to required only removes a `?`.
