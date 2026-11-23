@@ -316,3 +316,44 @@ def test_a_setting_with_choices_is_an_enum_and_numbers_are_numbers(live_app, iso
         assert (status, json.loads(text)["workers"], json.loads(text)["memory"]) == (200, 4, 8.5)
         assert typed.get("workers") == "4"
         assert put(base + "/api/settings", {"workers": 40})[0] == 400
+
+
+def test_system_extra_fields_are_in_the_schema(live_app):
+    """Issue #46: the app's own /api/system fields are described, so its web type needs nothing written by hand."""
+    from strata_python.contracts import ApiModel
+
+    class AppNumbers(ApiModel):
+        greetings: int
+        home_bytes: int | None = None
+
+    def numbers() -> AppNumbers:
+        return AppNumbers(greetings=3)
+
+    inferred = web.base_app("python-app", "1")
+    web.add_system(inferred, "1", extra=numbers)
+    named = web.base_app("python-app", "1")
+    web.add_system(named, "1", extra=lambda: {"greetings": 4}, extra_model=AppNumbers)
+    plain = web.base_app("demo", "1")
+    web.add_system(plain, "1", extra=lambda: {"queued": 2})  # a mapping and no model: sent, not described
+    for app, greetings in ((inferred, 3), (named, 4)):
+        with live_app(app) as base:
+            with urllib.request.urlopen(base + "/api/openapi.json") as r:
+                schemas = json.load(r)["components"]["schemas"]
+            info = json.loads(get(base + "/api/system")[1])
+        shape = schemas["PythonAppSystemInfo"]
+        assert {"greetings", "home_bytes", "version", "folders"} <= set(shape["required"])
+        assert shape["properties"]["greetings"]["type"] == "integer"
+        assert (info["greetings"], info["home_bytes"]) == (greetings, None)
+    with live_app(plain) as base:
+        with urllib.request.urlopen(base + "/api/openapi.json") as r:
+            schemas = json.load(r)["components"]["schemas"]
+        assert "queued" not in schemas["SystemInfo"]["properties"]
+        assert json.loads(get(base + "/api/system")[1])["queued"] == 2
+
+
+def test_an_unresolvable_return_annotation_means_no_model():
+    def broken() -> "NoSuchType":  # noqa: F821
+        return {}
+
+    assert web._returned_model(broken) is None
+    assert web._returned_model(None) is None

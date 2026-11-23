@@ -16,14 +16,18 @@ import datetime
 import json
 import os
 import platform
+import re
 import shutil
 import sys
+import typing
 from collections.abc import Callable, Mapping, Sequence
+from typing import cast
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from strata_python.client import Rejected, ServiceClient, Unavailable
 from strata_python.contracts import ErrorBody, Folder, ServiceStatus, SystemInfo
@@ -202,6 +206,22 @@ def _service(name: str, client: ServiceClient) -> ServiceStatus:
     )
 
 
+def _app_name(title: str) -> str:
+    """`my-app` -> `MyApp`, the prefix of the app's own schema components (as `Settings.model()` names them)."""
+    return "".join(p.capitalize() for p in re.split(r"[^0-9A-Za-z]+", title) if p)
+
+
+def _returned_model(fn: Callable[[], object] | None) -> type[BaseModel] | None:
+    """The pydantic model `fn` is annotated to return, if any."""
+    if fn is None:
+        return None
+    try:
+        hint = typing.get_type_hints(fn).get("return")
+    except Exception:  # an annotation that does not resolve (a lambda has none): no model, as before
+        return None
+    return hint if isinstance(hint, type) and issubclass(hint, BaseModel) else None
+
+
 def add_system(
     app: FastAPI,
     version: str,
@@ -209,22 +229,35 @@ def add_system(
     commit: str | None = None,
     folders: Mapping[str, str | Callable[[], str]] | None = None,
     services: Mapping[str, ServiceClient | str] | None = None,
-    extra: Callable[[], Mapping[str, object]] | None = None,
+    extra: Callable[[], Mapping[str, object] | BaseModel] | None = None,
+    extra_model: type[BaseModel] | None = None,
 ) -> None:
     """`GET /api/system`, a `SystemInfo`: the version and commit, Python and platform, when the server started, each
     named folder with its disk's free and total space, and each service this app calls with what its health endpoint
     answers now (probed in parallel, 2 s each). A folder is a path or a function giving one (a setting read on each
-    request); a service is a `ServiceClient` or a base URL. `extra` adds the app's own fields (a queue length)."""
+    request); a service is a `ServiceClient` or a base URL. `extra` adds the app's own fields (a queue length), as a
+    mapping or a model. Their model, `extra_model` or the model `extra` is annotated to return, is merged into the
+    response model, named `<App>SystemInfo` after the app's title, so the schema and the generated types list them;
+    without one they are sent but not described."""
     started = datetime.datetime.now(datetime.UTC)
     clients = {k: v if isinstance(v, ServiceClient) else ServiceClient(v) for k, v in (services or {}).items()}
+    fields = extra_model or _returned_model(extra)
+    shape: type[SystemInfo] = SystemInfo
+    if fields is not None:
+        # one component holding both: the web app's type is Schema<'<App>SystemInfo'>, nothing written by hand
+        shape = cast("type[SystemInfo]", type(_app_name(app.title) + "SystemInfo", (SystemInfo, fields), {}))
 
-    @app.get("/api/system", response_model=SystemInfo)
+    def own() -> dict[str, object]:
+        got: Mapping[str, object] | BaseModel = extra() if extra else {}
+        return got.model_dump() if isinstance(got, BaseModel) else dict(got)
+
+    @app.get("/api/system", response_model=shape)
     def get_system() -> SystemInfo:  # pyright: ignore[reportUnusedFunction]
         paths = {k: v if isinstance(v, str) else v() for k, v in (folders or {}).items()}
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(clients), 1)) as pool:
             probes = [pool.submit(_service, k, c) for k, c in clients.items()]
             statuses = [p.result() for p in probes]
-        return SystemInfo(
+        return shape(
             version=version,
             commit=commit,
             python=sys.version.split()[0],
@@ -232,7 +265,7 @@ def add_system(
             started_at=started,
             folders=[_folder(k, p) for k, p in paths.items()],
             services=statuses,
-            **(extra() if extra else {}),
+            **own(),
         )
 
 

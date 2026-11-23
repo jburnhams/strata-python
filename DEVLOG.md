@@ -4,6 +4,15 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-23
 
+**Issues #45 and #46: the shared responses and `/api/system`'s own fields, exact in the schema (branch `claude/project-thread-xzb4kc`)**
+
+The owner asked for the two issues raised while moving python-app-template onto 0.2.6. PR #42 had left the contracts on `BaseModel` so apps' generated types would not move; the template showed the move is what apps want (its `page.next ?? null`), and a field turning from optional to required only removes a `?`.
+
+- `src/strata_python/contracts.py`: `Health`, `Folder`, `ServiceStatus`, `SystemInfo`, `ErrorBody`, `Progress`, `Task` and `Page` on `ApiModel` (#45); `extra="allow"` merges with the inherited config. `FileRef` and `Judgment` stay on `BaseModel`: an app may take them as a request body, where `ApiModel` would split the component into `-Input` and `-Output`.
+- `src/strata_python/web.py`: `add_system` takes `extra_model`, or reads the model from `extra`'s return annotation, and declares a `SystemInfo` subclass with those fields named `<App>SystemInfo` after the app's title, as `Settings.model()` names `<App>Settings` (#46). A distinct name, not `SystemInfo` again: two components of one name make FastAPI fall back to long module-path names. `extra` may return the model itself.
+- `tests/unit/test_contracts.py`: every response shape lists all its fields as required, and `Page[Task]` in a served schema; `tests/unit/test_web.py`: the extra fields in the served schema, inferred and named, and the plain mapping unchanged.
+- README (server section), CHANGELOG.
+
 **Issues #36 to #41: public-check for web apps, an openapi command, settings enums, and a server's records (branch `claude/project-thread-xzb4kc`)**
 
 The owner asked for the six issues flashtap raised. Each came from code flashtap wrote around a gap here.
