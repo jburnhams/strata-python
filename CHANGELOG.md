@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.10 (2026-11-23)
+
 ### Added
 
 - `settings.positive(hi=None)` and `number_between(lo, hi=None, lo_open=False)`: a number that must be more than 0 with no natural floor (a cache size, a half-life) says "must be more than 0" and is `exclusiveMinimum` in the schema with `numbers=True` (#53). `hi` is optional on `number_between` and `whole_between` too, for a limit with no ceiling. Replace a hand-made `number_between` subclass with `positive()`.
