@@ -142,6 +142,42 @@ def run(
     return wait(int(submit(role, params, app, priority, model)["id"]), timeout)
 
 
+@dataclass(frozen=True)
+class Provenance:
+    """What a run job's output was made with, from its row: the model key, its load options as the job ran (the
+    service's models.toml options merged with the job's own) and `settings_hash`, which changes when the model's
+    runtime, file or options do even under the same key. Key a cache on (model, settings_hash). The options and hash
+    are None on rows from a service older than the one that records them."""
+
+    model: str | None
+    options: Json | None
+    settings_hash: str | None
+    job_id: int
+
+    @classmethod
+    def from_job(cls, job: Json) -> Provenance:
+        options = job.get("options")
+        return cls(
+            _opt_str(job, "model"), cast("Json", options) if isinstance(options, dict) else None,
+            _opt_str(job, "settings_hash"), int(job["id"]),
+        )  # fmt: skip
+
+
+def run_with_provenance(
+    role: str,
+    params: Mapping[str, Any] | None,
+    app: str,
+    priority: Priority = "normal",
+    model: str | None = None,
+    timeout: float | None = None,
+) -> tuple[Json, Provenance]:
+    """`run`, plus what the result was made with (`Provenance`): for an app that stores each result with its model
+    and settings, and keys its cache on them."""
+    job_id = int(submit(role, params, app, priority, model)["id"])
+    result = wait(job_id, timeout)
+    return result, Provenance.from_job(_call("GET", f"/api/jobs/{job_id}"))
+
+
 ROLES = (
     "faces",
     "face-kind",
@@ -336,6 +372,24 @@ def role_model(role: str) -> str | None:
     caches on it, so output made by an earlier model is made again when an eval changes the role's model."""
     roles = cast("list[Json]", _call("GET", "/api/registry").get("roles", []))
     return next((cast("str", r["model"]) for r in roles if r["key"] == role), None)
+
+
+@dataclass(frozen=True)
+class RoleSettings:
+    """The model that serves a role now and its `settings_hash` (see `Provenance`); the hash is None from a service
+    older than the one that reports it."""
+
+    model: str
+    settings_hash: str | None
+
+
+def role_settings(role: str) -> RoleSettings | None:
+    """`role_model` with the settings hash: a cache keyed on both is made again when the role's model changes, and
+    also when that model's options change under the same key (a threshold in the service's models.toml). None for an
+    unknown role."""
+    roles = cast("list[Json]", _call("GET", "/api/registry").get("roles", []))
+    r = next((r for r in roles if r["key"] == role), None)
+    return None if r is None else RoleSettings(str(r["model"]), _opt_str(r, "settings_hash"))
 
 
 class Lease:

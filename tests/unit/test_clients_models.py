@@ -186,3 +186,32 @@ def test_the_other_typed_results():
     assert (v.fps, v.frames, v.crops[0].box, v.crops[0].stills, v.quality["skipped"]) == (
         50.0, 400, (100, 50, 80, 80), ["/out/v-face-3.png"], "no numpy",
     )  # fmt: skip
+
+
+def test_a_result_with_what_made_it_and_the_settings_a_cache_keys_on(service):
+    service.models["shot-boundaries"] = "scene-score"
+    service.results["shot-boundaries"] = {"cuts": []}
+    service.options["shot-boundaries"] = {"threshold": 0.3}
+    now = sm.role_settings("shot-boundaries")
+    assert now is not None
+    assert (now.model, len(now.settings_hash or "")) == ("scene-score", 12)
+    result, p = sm.run_with_provenance("shot-boundaries", {"path": "/v.mp4"}, app="strata-reels")
+    assert result == {"cuts": []}
+    assert p == sm.Provenance("scene-score", {"threshold": 0.3}, now.settings_hash, p.job_id)
+    assert service.jobs[p.job_id - 1]["settings_hash"] == now.settings_hash
+    service.options["shot-boundaries"] = {"threshold": 0.4}  # the service's models.toml changed, the key did not
+    later = sm.role_settings("shot-boundaries")
+    assert later is not None
+    assert later.model == now.model
+    assert later.settings_hash != now.settings_hash
+    _, q = sm.run_with_provenance("shot-boundaries", {"path": "/v.mp4"}, app="strata-reels")
+    assert (q.options, q.settings_hash) == ({"threshold": 0.4}, later.settings_hash)
+    job = sm.submit("shot-boundaries", {}, app="evals", options={"width": 320})
+    assert (job["options"], job["settings_hash"]) == (None, None)  # recorded when it starts
+    assert sm.Provenance.from_job(sm.wait_job(job["id"])).options == {"threshold": 0.4, "width": 320}
+    assert sm.role_settings("nope") is None
+
+
+def test_provenance_from_a_row_of_an_older_service():
+    p = sm.Provenance.from_job({"id": 7, "model": "buffalo_l", "status": "done"})
+    assert p == sm.Provenance("buffalo_l", None, None, 7)

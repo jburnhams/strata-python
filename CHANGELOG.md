@@ -4,6 +4,10 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `clients.models.run_with_provenance(...)` returns `(result, Provenance)`: the job's `model`, the load `options` it ran with, its `settings_hash` and `job_id`; `Provenance.from_job(row)` reads the same from any job row. `clients.models.role_settings(role)` returns `RoleSettings(model, settings_hash)`. Key a result cache on `(model, settings_hash)` so it is made again when strata-models changes a model's options under the same key (strata-models #103; the hash and options are None from a service older than that). `FakeModels.options[role]` sets the stand-in's load options, and its jobs and registry carry the same fields.
+
 ## 0.2.7 (2026-11-23)
 
 ### Added

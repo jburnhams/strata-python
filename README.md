@@ -17,7 +17,7 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 | `strata_python.mediatime` | Exact time for media: `rational` seconds (Fraction), `Rate` (`frame_at`, `time_of`, `snap`), half-open `Span`, and `TimeMap` from an edit's output time to its sources and back, with exact JSON |
 | `strata_python.images` (extra `[images]`) | `thumbnail(src, px, cache_dir=...)` (an upright JPEG, made once, keyed on the file, never enlarged, the app's own reader through `make=`), `open_upright`, `flatten` (alpha and 16-bit greys to 8-bit RGB), `jpeg_bytes` |
 | `strata_python.stats` | Pairwise rankings and eval statistics in pure Python: `bradley_terry` (ties, an optional side advantage, Elo-scale `ratings()`), `intervals` (bootstrap), `head_to_head`, `votes_from(judgments)`, `wilson`, `mcnemar`, `holm` |
-| `strata_python.clients.models` | The strata-models client, standard library only: `run`, `submit`, `wait`, `role_model`, `gpu_lease`, a shortcut for every role the service runs (`faces`, `face_kind`, `transcribe`, `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed`, `enhance_video`, and `ask` for the language models) and a typed result for each |
+| `strata_python.clients.models` | The strata-models client, standard library only: `run`, `submit`, `wait`, `role_model`, `run_with_provenance` and `role_settings` (the model and settings a result was made with, for cache keys), `gpu_lease`, a shortcut for every role the service runs (`faces`, `face_kind`, `transcribe`, `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed`, `enhance_video`, and `ask` for the language models) and a typed result for each |
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
 | pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, `fake_models` (a stand-in strata-models), and the `integration` marker on everything under `tests/integration` |
 | `strata_python.testing` | The fakes behind those fixtures (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) `FakeModels`, the CLI runners `run_cli(main, *args)` and `run_module("myapp", *args, src=...)`, and `assert_openapi_current(create_app, path)` |
@@ -358,6 +358,7 @@ migrations = "migrations"        # the app's Alembic revisions, unchanged
   from strata_python.db.web import DbSession, add_database
 
   add_database(app, Project.load(__file__), default=lambda: local_url(SETTINGS))
+
 
   @app.get("/api/notes")
   def notes(db: DbSession) -> list[NoteOut]: ...
