@@ -10,10 +10,11 @@ queue built on them.
 """
 
 from strata_python.contracts import Progress
+from strata_python.files import write_json_atomic
 from strata_python.tasks.flight import Conflict, Flight, SingleFlight
 from strata_python.tasks.progress import ProgressReporter, report_progress, reporting
 from strata_python.tasks.retry import PROGRAMMING_ERRORS, Decision, RetryLater, backoff_s, describe, next_state
-from strata_python.tasks.status import Detached, StatusFile, write_json_atomic
+from strata_python.tasks.status import Detached, StatusFile
 from strata_python.tasks.ticker import Ticker
 
 __all__ = [

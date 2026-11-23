@@ -62,6 +62,10 @@ pdf = [
     "pypdfium2>=4.30,<6",
     "pillow>=13,<14",   # 13.0.0 fixes eight advisories, most in PDF parsing, which this extra exists for
 ]
+# strata_python.images: pictures turned by their EXIF orientation and cached JPEG thumbnails of them.
+images = [
+    "pillow>=13,<14",
+]
 
 [project.urls]
 Homepage = "https://github.com/jburnhams/strata-python"
@@ -78,7 +82,7 @@ strata_python = "strata_python.pytest_plugin"
 strata_python_db = "strata_python.db.pytest_plugin"   # inert unless the db extra is installed and the project has [tool.strata-db]
 
 [dependency-groups]
-dev = ["strata-python[dev,db,pdf]"]   # the same tools the apps get, and the db and pdf extras so their tests run
+dev = ["strata-python[dev,db,pdf,images]"]   # the same tools the apps get, and the extras so their tests run
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/strata_python"]
