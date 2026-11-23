@@ -256,21 +256,20 @@ def _with_progress(
         stdin=subprocess.DEVNULL if data is None else subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
         cwd=cwd,
-    )
+    )  # bytes, so the input can be written as it is
     out, errs = proc.stdout, proc.stderr
     if out is None or errs is None:  # pragma: no cover - both are pipes above
         raise MediaError("ffmpeg's output pipes did not open")
     err: list[str] = []
-    drain = threading.Thread(target=lambda: err.append(errs.read()), daemon=True)
+    drain = threading.Thread(target=lambda: err.append(errs.read().decode(errors="replace")), daemon=True)
     drain.start()
     if data is not None and proc.stdin is not None:  # fed on a thread: ffmpeg reads input while it writes progress
         feed_pipe = proc.stdin
 
         def feed() -> None:
             with contextlib.suppress(BrokenPipeError, OSError, ValueError):
-                feed_pipe.buffer.write(data)
+                feed_pipe.write(data)
             with contextlib.suppress(OSError):
                 feed_pipe.close()
 
@@ -285,8 +284,8 @@ def _with_progress(
     if timer:
         timer.start()
     try:
-        for line in out:
-            key, _, value = line.strip().partition("=")
+        for raw in out:
+            key, _, value = raw.decode(errors="replace").strip().partition("=")
             if key in ("out_time_us", "out_time_ms"):  # both are microseconds (out_time_ms is misnamed by ffmpeg)
                 us = _num(value, int)
                 if us is not None and us >= 0:
