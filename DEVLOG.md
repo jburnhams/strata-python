@@ -4,6 +4,13 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-23
 
+**Main's CI red on a Ticker test; `derive` listed under the wrong release (branch `claude/project-thread-42bdk4`)**
+
+After #56 merged, CI on main failed on Windows in `test_ticker_fn_chooses_the_next_wait_and_poke_wakes_it` (from #58), so no release ran and `derive` is not on PyPI. The test waited for `next_at` to be set after the second run, which it also is for the 1 ms wait between the second and third runs; Windows' coarse clock made that moment long enough to be read. It now waits for the long wait itself.
+
+- `tests/unit/test_tasks.py`: the wait condition. No library code changes.
+- `CHANGELOG.md`: a correction. 0.2.10 was released from #58 while #56 was open, and merging main into #56 put its two lines under the 0.2.10 heading; `derive` and `media.ffmpeg(sink=)` are not in 0.2.10, so they move back to Unreleased, for the next release.
+
 **`derive`: proxies, thumbnails and audio peaks beside `media.probe` (branch `claude/project-thread-42bdk4`)**
 
 strata-reels' first step (ingest) needs a browser proxy, thumbnails and audio peaks for every tape, and its plan puts them here because every app that shows footage needs the same three. The owner set that ingest starts from the raw footage: restoration is a strata-models job later in reels' pipeline, so the proxy only deinterlaces for display and changes nothing else.

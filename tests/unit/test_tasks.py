@@ -304,7 +304,9 @@ def test_ticker_fn_chooses_the_next_wait_and_poke_wakes_it():
 
     t = Ticker(3600, step, name="prefetch", immediately=True).start()
     try:
-        wait_for(lambda: done == ["a", "b"] and t.next_at is not None)
+        # the long wait, after the third run found nothing: after "b" there is a moment with next_at 1 ms ahead
+        # (Windows' coarse clock made that moment long enough to be read)
+        wait_for(lambda: done == ["a", "b"] and t.next_at is not None and t.next_at - time.time() > 60)
         next_at = t.next_at
         assert next_at is not None
         assert 3500 < next_at - time.time() <= 3600
