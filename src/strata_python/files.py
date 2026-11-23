@@ -29,11 +29,31 @@ import hashlib
 import json
 import os
 import secrets
+import sys
 import time
 from collections.abc import Callable, Generator
-from typing import IO, Any, Protocol
+from typing import IO, Any, Protocol, TypeVar
 
+T = TypeVar("T")
+
+WIN = sys.platform == "win32"
 CHUNK = 1 << 20  # 1 MiB: big enough that the hash, not the syscalls, is the cost; small enough to stay out of memory
+
+
+def _windows_patient(fn: Callable[[], T], wait_s: float = 2.0) -> T:
+    """`fn()`, retried for up to `wait_s` on Windows while it raises PermissionError. Windows refuses to replace a file
+    another process (or thread) has open, and refuses to open one while it is being replaced, so a writer and a
+    reader that would never see each other on POSIX collide there for a few milliseconds. Elsewhere it runs once."""
+    if WIN:
+        end = time.monotonic() + wait_s
+        while True:
+            try:
+                return fn()
+            except PermissionError:
+                if time.monotonic() >= end:
+                    raise
+                time.sleep(0.01)
+    return fn()
 
 
 # ---- atomic writes ---------------------------------------------------------------------------------------------------
@@ -55,7 +75,7 @@ def atomic_path(path: str | os.PathLike[str]) -> Generator[str]:
     tmp = _temp_name(target)
     try:
         yield tmp
-        os.replace(tmp, target)
+        _windows_patient(lambda: os.replace(tmp, target))
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
@@ -93,9 +113,13 @@ def write_json_atomic(path: str | os.PathLike[str], data: object, *, indent: int
 def read_json(path: str | os.PathLike[str], default: Any = None) -> Any:
     """The parsed file, or `default` when it is missing or not JSON (half-written by code that did not write it
     atomically, or a file the app never made). A permission error still raises: that is not "no file"."""
-    try:
+
+    def load() -> Any:
         with open(path, encoding="utf8") as f:
             return json.load(f)
+
+    try:
+        return _windows_patient(load)
     except (FileNotFoundError, NotADirectoryError, ValueError):
         return default
 
@@ -189,10 +213,13 @@ class DiskCache:
 
     def get(self, key: str, max_age_s: float | None = None) -> bytes | None:
         """The stored bytes, or None when there are none or they are older than `max_age_s`."""
-        try:
+
+        def load() -> tuple[bytes, bytes]:
             with open(self.path(key), "rb") as f:
-                head = f.readline()
-                body = f.read()
+                return f.readline(), f.read()
+
+        try:
+            head, body = _windows_patient(load)
             stored = float(json.loads(head)["at"])
         except (OSError, ValueError, KeyError, TypeError):
             return None

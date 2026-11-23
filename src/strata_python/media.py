@@ -33,6 +33,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from strata_python import oslib
+
 Json = dict[str, Any]
 ENV = {"ffmpeg": "STRATA_FFMPEG", "ffprobe": "STRATA_FFPROBE"}
 
@@ -236,14 +238,33 @@ def ffmpeg(
         base.insert(1, "-nostdin")
     cmd = [*base, *(os.fspath(a) for a in args)]
     if progress is None:
+        proc = subprocess.Popen(  # noqa: S603 - our own ffmpeg command
+            cmd,
+            stdin=subprocess.DEVNULL if input is None else subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=cwd,
+        )
         try:
-            r = subprocess.run(cmd, input=input, capture_output=True, timeout=timeout, cwd=cwd)  # noqa: S603
+            out, err = proc.communicate(input, timeout=timeout)
         except subprocess.TimeoutExpired:
+            _kill(proc)
             raise MediaError(f"ffmpeg took longer than {timeout:g} s") from None
-        if r.returncode:
-            raise MediaError(f"ffmpeg failed (exit {r.returncode}): {_tail(r.stderr)}")
-        return r.stdout
+        if proc.returncode:
+            raise MediaError(f"ffmpeg failed (exit {proc.returncode}): {_tail(err)}")
+        return out
     return _with_progress([*base, "-progress", "pipe:1", "-nostats", *cmd[len(base) :]], progress, timeout, cwd, input)
+
+
+def _kill(proc: subprocess.Popen[bytes], reap: bool = True) -> None:
+    """Stop ffmpeg and anything it started. On Windows a package manager's `ffmpeg.exe` is often a shim that starts the
+    real one; killing only the shim leaves the real one holding the pipes, and the read waits for ever."""
+    oslib.kill_tree(proc.pid, 9)
+    with contextlib.suppress(OSError):
+        proc.kill()
+    if reap:  # the progress reader's threads read the pipes themselves
+        with contextlib.suppress(subprocess.TimeoutExpired, OSError, ValueError):
+            proc.communicate(timeout=10)
 
 
 def _with_progress(
@@ -278,7 +299,7 @@ def _with_progress(
 
     def kill() -> None:
         fired.set()
-        proc.kill()
+        _kill(proc, reap=False)
 
     timer = threading.Timer(timeout, kill) if timeout else None
     if timer:
