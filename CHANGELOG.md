@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.6 (2026-11-23)
+
 ### Added
 
 - `strata-public-check` reads web source (`.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mdx`, `.css`, `.html`, `.svg`, `.vue`, `.env.example`) and skips `storybook-static/` and `baselines/` (#37). Remove the app's own privacy scan of its front end.
