@@ -4,6 +4,18 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `strata_python.files`: `atomic_path(path)` (a temp path beside the file, keeping its extension so ffmpeg can write to it, replaced on success and removed on error), `atomic_open`, `write_text_atomic`, `write_bytes_atomic`, `write_json_atomic(path, data, indent=1)`, `read_json(path, default)` (missing or broken file: the default), `sha256`/`sha256_hex`, `quick_fingerprint` (size and both ends of a big file), `stat_key(path, *extra)`, `inside(root, path)` (a path from a request, refused with `ValueError` if it leaves the root) and `DiskCache` (bytes or `json(key, fetch, max_age_s)` on disk with an age). Replace the app's `tmp` + `os.replace` writes, its sha256 helpers and its response caches.
+- `strata_python.http.Http(user_agent, ...)`: the polite client for public web APIs. A gap per host across threads (`min_interval`) and processes (`throttle_file`), 429 and 503 waiting for Retry-After (seconds or a date, capped at `max_wait`), a `cool_down` for a host still saying 429, retries of 5xx and network errors only for idempotent requests (`idempotent=True` for a read sent as POST), `max_bytes`, `https_only`, an optional `DiskCache` (`cache_s=`; 200 and 404 kept), and `observe(reply, attempt)`. Errors come back as a `Reply` (`ok`, `status` 0 when unreachable, `error`, `limited`, `cached`, `json()`, `text()`); `raise_for_status()` and `get_json()` raise `HttpError`. Replace the app's own throttle, Retry-After and cache code.
+- `strata_python.media`: `probe(path)` returns a `Probe` (duration, format, size, bit rate, tags, `streams` as `Stream`, `chapters`, `video`/`audio`, ffprobe's `warnings`, `raw`); `duration(path)`; `ffmpeg(args, input=, timeout=, progress=)` with `-nostdin -hide_banner -v error -y`, raising `MediaError` with the tail of ffmpeg's stderr; `tool(name)` honours `STRATA_FFMPEG` and `STRATA_FFPROBE`; `available()`. Replace the app's ffprobe and ffmpeg wrappers.
+- `strata_python.images` and the `[images]` extra (Pillow): `thumbnail(src, px, cache_dir=, quality=, version=, make=)` returns the path of a cached upright JPEG (keyed on the file, the size, the quality and `version`; never enlarged; one maker per file at a time and `slots` at once); `open_upright`, `flatten`, `jpeg_bytes`. Replace the app's thumbnail cache.
+- `strata_python.stats`: `bradley_terry(votes, side=)` (a `Fit` with `strengths`, the side advantage, `ratings()` on the Elo scale and `p_beats`), `intervals` (bootstrap over votes), `head_to_head`, `votes_from(judgments)`, `wilson`, `mcnemar`, `holm`. Pure Python. Replace the arena's and the evals' copies.
+
+### Changed
+
+- `tasks.write_json_atomic` is now `files.write_json_atomic` (the same import still works). It also fsyncs before the replace, writes non-ASCII characters as they are instead of `\u` escapes, and takes `indent=`.
+
 ## 0.2.4 (2026-11-23)
 
 ### Fixed

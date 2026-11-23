@@ -11,6 +11,11 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 | `strata_python.contracts` | The shapes the apps' APIs share, as pydantic models for `response_model`: `Health`, `SystemInfo`, `ErrorBody`, `Task` (with `TaskState`), `Progress`, `Page[T]`, `FileRef`, `Judgment` |
 | `strata_python.client` | `ServiceClient`, the standard-library base for calling a strata service: JSON calls, `Rejected` (4xx, with the reason and payload) and `Unavailable` (down or 5xx), retried reads, a long-poll `wait`, `available()`, and `env_url` |
 | `strata_python.tasks` | Work outside a request: `next_state`/`backoff_s`/`RetryLater` (when to retry), `report_progress` and `ProgressReporter` (throttled), `SingleFlight` (one run per key, `Conflict` on a second), `StatusFile` and `Detached` (a process that outlives the server), `Ticker` (a loop that survives its errors), and with the `[db]` extra `tasks.queue` (`Queue`, `Worker`, `jobs_table`: durable jobs with retry, dedupe, resources, cancel and crash recovery) |
+| `strata_python.files` | Atomic writes (`atomic_path` keeps the extension for ffmpeg, `atomic_open`, `write_json_atomic`, `write_text_atomic`, `write_bytes_atomic`), `read_json(path, default)`, `sha256`/`sha256_hex`, `quick_fingerprint` (size and both ends), `stat_key` (a cache key that follows the file), `inside(root, path)` (refuses `..` and links out), and `DiskCache` (values on disk with an age; `json(key, fetch, max_age_s)`) |
+| `strata_python.http` | `Http(user_agent, min_interval=...)`, the polite client for other people's APIs: a gap per host across threads (and processes with `throttle_file`), Retry-After as seconds or a date, a cool-down for a host that keeps saying 429, retries that never replay a write, a size cap, an optional `DiskCache`, and errors returned as a `Reply` (`raise_for_status()`, `get_json()` for code that wants exceptions) |
+| `strata_python.media` | `probe(path)` (a typed `Probe`: duration, format, tags, streams, chapters, ffprobe's warnings), `duration`, `ffmpeg(args, progress=...)` raising `MediaError` with ffmpeg's own reason, `available()` |
+| `strata_python.images` (extra `[images]`) | `thumbnail(src, px, cache_dir=...)` (an upright JPEG, made once, keyed on the file, never enlarged, the app's own reader through `make=`), `open_upright`, `flatten` (alpha and 16-bit greys to 8-bit RGB), `jpeg_bytes` |
+| `strata_python.stats` | Pairwise rankings and eval statistics in pure Python: `bradley_terry` (ties, an optional side advantage, Elo-scale `ratings()`), `intervals` (bootstrap), `head_to_head`, `votes_from(judgments)`, `wilson`, `mcnemar`, `holm` |
 | `strata_python.clients.models` | The strata-models client, standard library only: `run`, `submit`, `wait`, `role_model`, `gpu_lease`, a shortcut for every role the service runs (`faces`, `face_kind`, `transcribe`, `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed`, `enhance_video`, and `ask` for the language models) and a typed result for each |
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
 | pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, `fake_models` (a stand-in strata-models), and the `integration` marker on everything under `tests/integration` |
@@ -100,8 +105,8 @@ To keep the values in the app's database instead of the file, add the table to t
 ```python
 from strata_python.db.settings import TableStore, settings_table
 
-SETTINGS_TABLE = settings_table(Base.metadata)        # in models.py, so the migrations create it
-SETTINGS.bind(TableStore(engine, SETTINGS_TABLE))     # any object with load() and update(changes) is a store
+SETTINGS_TABLE = settings_table(Base.metadata)  # in models.py, so the migrations create it
+SETTINGS.bind(TableStore(engine, SETTINGS_TABLE))  # any object with load() and update(changes) is a store
 ```
 
 ### 4. The server
@@ -120,11 +125,15 @@ def create_app():
 Two more that replace code most servers carry:
 
 ```python
-web.add_error_handlers(app)          # ValueError 400, PermissionError 403, KeyError and FileNotFoundError 404,
-                                     # tasks.Conflict 409, client.Rejected 502, client.Unavailable 503: {detail, payload}
-web.add_system(app, __version__, commit=web.source_commit(__file__),
-               folders={"data": lambda: SETTINGS.get("data_dir")},
-               services={"strata-models": "http://127.0.0.1:8366"})   # GET /api/system, a SystemInfo
+web.add_error_handlers(app)  # ValueError 400, PermissionError 403, KeyError and FileNotFoundError 404,
+# tasks.Conflict 409, client.Rejected 502, client.Unavailable 503: {detail, payload}
+web.add_system(
+    app,
+    __version__,
+    commit=web.source_commit(__file__),
+    folders={"data": lambda: SETTINGS.get("data_dir")},
+    services={"strata-models": "http://127.0.0.1:8366"},
+)  # GET /api/system, a SystemInfo
 ```
 
 Delete the app's `guard()` (or each route's `try/except` raising `HTTPException`), passing its own exceptions as `add_error_handlers(app, {BookLocked: 423})`, and its `/api/system` route. Give `base_app` the same `commit=` so `/api/health` says which source the server runs. Declare a route's answer with a shape from `strata_python.contracts` (`response_model=Page[Task]`) where the app already returns that shape, so the web app's types can come from `/api/openapi.json`.
@@ -174,9 +183,9 @@ A check returns `(status, text)` with status `ok`, `missing`, `slow` (works, but
 Drop the `strata-models-client` path or git dependency and change the import. The functions, their arguments and the exceptions are the same:
 
 ```python
-from strata_python.clients import models as sm   # was: import strata_models_client as sm
+from strata_python.clients import models as sm  # was: import strata_models_client as sm
 
-page = sm.OcrPage.from_json(sm.ocr("/path/page.png", app="strata-scan"))   # typed: page.lines[0].words[0].box
+page = sm.OcrPage.from_json(sm.ocr("/path/page.png", app="strata-scan"))  # typed: page.lines[0].words[0].box
 talk = sm.Transcript.from_json(sm.transcribe("/path/talk.wav", app="strata-360"))
 with sm.gpu_lease("strata-stills", vram_gb=4):
     run_my_own_cuda_code()
@@ -201,14 +210,47 @@ Replace the app's job dicts and loops with `strata_python.tasks`:
 ```python
 from strata_python.tasks.queue import Job, Queue, Worker
 
-QUEUE = Queue(engine, JOBS, on_fail=cascade)                   # on_fail(conn, job, error), in the failing transaction
+QUEUE = Queue(engine, JOBS, on_fail=cascade)  # on_fail(conn, job, error), in the failing transaction
 QUEUE.enqueue("ocr", {"page": 3}, domain="book:12", dedupe=True, resources=["gpu"], timeout_s=600)
-WORKER = Worker(QUEUE, {"ocr": ocr_page}, concurrency=2).start()   # a job process per thread, reused; recovers dead workers' jobs
-QUEUE.page(state="running", after=cursor)                      # Page[Task] for GET /api/jobs
-QUEUE.cancel(job_id); QUEUE.retry(job_id); QUEUE.prune(older_than_s=30 * 86400)
+WORKER = Worker(
+    QUEUE, {"ocr": ocr_page}, concurrency=2
+).start()  # a job process per thread, reused; recovers dead workers' jobs
+QUEUE.page(state="running", after=cursor)  # Page[Task] for GET /api/jobs
+QUEUE.cancel(job_id)
+QUEUE.retry(job_id)
+QUEUE.prune(older_than_s=30 * 86400)
 ```
 
   A handler is a module-level `fn(job) -> result` that reads `job.options` and reports progress. By default jobs run in job processes (`python -m strata_python.tasks.child`, one per worker thread, kept between jobs and importing the handlers by name), so a cancel, a timeout or `WORKER.stop()` kills the job and every tool it started, and jobs die with the server; a quick job costs about half a millisecond more than on a thread (3.5 ms against 2.9 ms a job on SQLite), since only a kill starts a new process. `max_jobs=N` replaces a process after N jobs, for code that leaks. The worker checks at start-up that every handler can be imported. `Worker(lower_priority=True)` runs the jobs at idle CPU and disk priority. `Worker(isolate=False)` runs handlers on the server's threads instead, where they return early when `job.stopping`. In tests, `QUEUE.step(handlers)` claims and runs one job in the test's own thread.
+
+### 6c. Files, web APIs, media, pictures and rankings
+
+Each of these replaces code that two to six apps wrote for themselves; move to it when you next touch that code.
+
+- **Writes.** Every `tmp = path + ".tmp"; ...; os.replace(tmp, path)` becomes `write_json_atomic(path, data)` (or `write_text_atomic`, `write_bytes_atomic`, `with atomic_open(path, "wb") as f:`). A tool that writes the file itself writes to `with atomic_path(out) as tmp:`; the temp name keeps the extension, so `ffmpeg ... tmp` still picks the format. Reads that tolerate a missing or broken file are `read_json(path, default)`. Delete the app's `_save`, `write_status` and `.part` helpers.
+- **Hashes and keys.** `sha256(path)` (bytes, for a `LargeBinary` column) and `sha256_hex(path)` replace listory's two copies, filecat's and stills' scripts'. `quick_fingerprint(path)` is 360's `clips.fingerprint` idea on SHA-256 (an app that stored the old 12-character SHA-1 keeps its own until it re-keys). A cache that must follow a file's changes keys on `stat_key(path, px, version)`.
+- **Paths from a request.** `files.inside(root, name)` before opening a file a request names; it raises `ValueError` (400 with `add_error_handlers`) for `..`, an absolute path elsewhere, or a link out of the root.
+- **Other people's APIs.** One `Http` per service, at module level so its gap is shared:
+
+```python
+from strata_python.files import DiskCache
+from strata_python.http import Http
+
+NOMINATIM = Http(
+    "myapp/1.0 (reverse geocoding of my own tracks)",
+    min_interval=1.1,
+    throttle_file=cache_dir / ".nominatim",
+    cache=DiskCache(cache_dir),
+)
+reply = NOMINATIM.get(URL, params={"lat": lat, "lon": lon, "format": "json"}, cache_s=30 * 86400)
+if reply.ok:
+    place = reply.json()  # reply.status == 0 when unreachable; reply.limited when rate limited
+```
+
+  The User-Agent names the app and what it is for, never a person. Delete the app's `_throttle`, `_retry_after`, `_cool_until`, `_open`/`_get` wrappers and its response cache; listory's `providers.base.Http` keeps its own `emit` through `observe=`. A provider result worth keeping (not an HTTP body) is `DiskCache(...).json(key, fetch, max_age_s)`.
+- **ffprobe and ffmpeg.** `media.probe(path)` replaces every hand-written `ffprobe -show_entries` call; read `info.duration`, `info.audio.sample_rate`, `info.video.fps`, `info.chapters`, `info.tags`, and `info.raw` for anything else. `media.ffmpeg(args)` adds `-nostdin -hide_banner -v error -y` and raises `MediaError` with ffmpeg's last lines; `progress=` reports seconds written. Map `MediaError` in `add_error_handlers` if the app answers it over HTTP. A doctor row is `cli.program("ffmpeg")`.
+- **Thumbnails** (`strata-python[images]`): `images.thumbnail(src, px, cache_dir=settings.thumbs_dir())` returns the cached JPEG's path for a `FileResponse`. An app with its own reader (stills' raw previews, 360's video frames) passes `make=lambda path, px: ...` returning a Pillow image. Bump `version=` when the way a thumbnail is made changes.
+- **Rankings and evals.** `stats.bradley_terry(votes, side=True)` with votes as `(a, b, "a" | "b" | "tie")` (or `stats.votes_from(judgments)`), `.ratings()` for the Elo scale, `stats.intervals(votes)` for how far to trust a gap; `wilson`, `mcnemar` and `holm` for eval write-ups. The numpy bootstraps over items in strata-models' evals stay there until a second app needs them.
 
 ### 7. Tests
 

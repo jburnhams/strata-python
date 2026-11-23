@@ -15,6 +15,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       STRATA_TEST_PG: ${{ matrix.os != 'macos-latest' && '1' || '' }}
+      STRATA_TEST_FFMPEG: "1"   # strata_python.media's tests run the real ffmpeg; a missing one fails them here instead of skipping
     strategy:
       fail-fast: false
       matrix:
@@ -38,6 +39,15 @@ jobs:
       - name: PostgreSQL server binaries
         if: matrix.os == 'ubuntu-latest'
         run: ls /usr/lib/postgresql/*/bin/initdb || (sudo apt-get update && sudo apt-get install -y postgresql)
+      - name: ffmpeg (strata_python.media runs the real tools)
+        shell: bash
+        run: |
+          if command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null; then ffmpeg -version | head -1; exit 0; fi
+          case "${{ runner.os }}" in
+            Linux) sudo apt-get update && sudo apt-get install -y ffmpeg ;;
+            macOS) brew install ffmpeg ;;
+            Windows) choco install ffmpeg -y --no-progress && echo "C:\ProgramData\chocolatey\bin" >> "$GITHUB_PATH" ;;
+          esac
       - name: Lockfile, lint, format and types (once, on the newest Python)
         if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'
         run: uv run --locked strata-check --fast

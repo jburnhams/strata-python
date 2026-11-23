@@ -26,30 +26,15 @@ import datetime
 import json
 import os
 import subprocess
-import tempfile
 from collections.abc import Generator, Mapping, Sequence
 from typing import Any, cast
 
 from strata_python import oslib
+from strata_python.files import write_json_atomic
 from strata_python.tasks.flight import Conflict
 
 ENV = "STRATA_STATUS_FILE"
 Json = dict[str, Any]
-
-
-def write_json_atomic(path: str, data: object) -> None:
-    """Write JSON so a reader sees the old file or the new one, never half of either."""
-    folder = os.path.dirname(os.path.abspath(path))
-    os.makedirs(folder, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=folder, prefix=".status.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf8") as f:
-            json.dump(data, f, indent=1, default=str)
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
 
 
 class StatusFile:
