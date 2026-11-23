@@ -1,4 +1,3 @@
-import os
 import shutil
 import subprocess
 import sys
@@ -139,7 +138,15 @@ def test_lower_priority_sets_the_nice_value_absolutely(start, nice, expected):
     assert int(out) == expected
 
 
-@pytest.mark.skipif(oslib.WIN or os.geteuid() != 0, reason="starting below 0 needs root")
+def _can_start_below_zero() -> bool:
+    """Root without CAP_SYS_NICE (a locked-down container) is refused too, so ask the kernel, in a child."""
+    if oslib.WIN:
+        return False
+    probe = "import os; os.setpriority(os.PRIO_PROCESS, 0, -10)"
+    return subprocess.run([sys.executable, "-c", probe], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not _can_start_below_zero(), reason="starting below 0 needs root with CAP_SYS_NICE")
 def test_lower_priority_from_below_zero_reaches_19():
     """Issue #28 as seen: a macOS runner starts at -10, and os.nice(19) left the worker at 9."""
     code = (
