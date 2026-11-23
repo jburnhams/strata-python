@@ -1055,6 +1055,9 @@ def test_local_url_and_a_default_when_nothing_is_configured(tmp_path: Path, monk
     monkeypatch.delenv("DEMO_DATABASE_URL")
     monkeypatch.setenv("STRATA_DB_DATABASE", "shared")
     assert resolve_url("demo", default=local).startswith("postgresql")  # so does a named shared database
+    monkeypatch.delenv("STRATA_DB_DATABASE")
+    pg = resolve_url("demo", "other", default="postgresql://h/db")  # a Postgres fallback reads the app's schema
+    assert pg == "postgresql+psycopg://h/db?options=-csearch_path%3Dother"
 
 
 def test_project_open_connects_and_migrates_making_the_folder(app: Path, tmp_path: Path):

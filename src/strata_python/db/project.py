@@ -129,10 +129,12 @@ class Project:
     def open(self, url: str | None = None, *, default: str | None = None) -> Engine:
         """An engine on the app's database, migrated to head: `url`, else `url()` with `default` (a URL or path,
         such as `config.local_url(SETTINGS)`) when nothing is configured. Call once and keep the engine."""
-        from .config import url_for
+        from .config import normalise_url, url_for, with_search_path
         from .engine import connect
 
-        engine = connect(url or url_for(self.app, self.schema, default=default))
+        # a Postgres URL without a search_path would query public while upgrade() migrated the app's schema
+        given = with_search_path(normalise_url(url), self.schema) if url else None
+        engine = connect(given or url_for(self.app, self.schema, default=default))
         try:
             self.upgrade(engine)
         except BaseException:

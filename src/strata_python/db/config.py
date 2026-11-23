@@ -95,7 +95,7 @@ def resolve_url(app: str, schema: str | None = None, *, default: str | None = No
         if value := os.environ.get(var):
             return with_search_path(normalise_url(value), schema or app)
     if default is not None and not shared_database():
-        return normalise_url(default)
+        return with_search_path(normalise_url(default), schema or app)  # as an environment URL (review finding)
     return schema_url(schema or app)
 
 
