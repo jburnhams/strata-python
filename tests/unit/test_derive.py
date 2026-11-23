@@ -194,3 +194,11 @@ def test_reduce_takes_a_short_last_slice():
 
 def test_every_recipe_has_a_version():
     assert set(derive.RECIPE) == {"proxy", "thumbnails", "peaks"}
+
+
+@needs_ffmpeg
+def test_thumbnails_reach_the_last_stretch_and_not_closer_than_frames(clips, tmp_path):
+    # 3 s at a 2 s step: the second picture is in the last second, which ffmpeg's fps filter leaves out
+    assert [t.time for t in derive.thumbnails(clips["progressive"], tmp_path / "t", every=2)] == [0, 2]
+    with pytest.raises(ValueError, match="closer than the frames"):
+        derive.thumbnails(clips["progressive"], tmp_path / "t", every=Fraction(1, 50))

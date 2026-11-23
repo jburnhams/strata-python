@@ -18,8 +18,9 @@ Choices that matter to an app:
 - **A short GOP** (a keyframe every `gop` seconds, no scene-cut keyframes) so seeking in a browser lands quickly and
   exactly; square pixels (`setsar=1`, width from the display aspect), since a browser's handling of anamorphic MP4
   differs; `+faststart`, so it plays before it is all downloaded; never larger than the source.
-- **Thumbnails** are JPEGs, one per `every` seconds from the start, the frame nearest each time (ffmpeg's `fps`
-  filter), named by their index; `Thumb.time` is `index * every`, exact.
+- **Thumbnails** are JPEGs, one per `every` seconds from the start: the first frame at or after each multiple of
+  `every` (a `select` on the frame's time, so the last stretch of a file gets its picture, which ffmpeg's `fps` filter
+  drops), named by their index; `Thumb.time` is `index * every`, exact, and the picture is at most a frame after it.
 - **Peaks** are the lowest and highest sample of each slice of the first audio stream mixed to mono, from -1 to 1:
   the pair strata-react's `Waveform` takes. The audio is read as it is decoded (`media.ffmpeg(sink=...)`), never held
   whole, so a two-hour tape costs the same memory as a minute.
@@ -167,9 +168,13 @@ def thumbnails(
     if step <= 0:
         raise ValueError(f"thumbnails need a step above zero, not {every}")
     info = info or media.probe(src)
-    _video(info)
     fields = interlace or interlacing(src, info=info)
-    vf = ",".join([*_deinterlace(fields), f"fps=fps={step.denominator}/{step.numerator}", _scale(height)])
+    rate = _video(info).fps
+    if rate and step < Fraction(1) / mediatime.rational(rate):
+        raise ValueError(f"thumbnails {every} s apart are closer than the frames ({rate:g} a second)")
+    slot = f"floor(t*{step.denominator}/{step.numerator})"  # which multiple of `every` a frame is in
+    pick = f"select='isnan(prev_t)+gt({slot}\\,floor(prev_t*{step.denominator}/{step.numerator}))'"
+    vf = ",".join([*_deinterlace(fields), pick, _scale(height)])
     named: str = os.fspath(folder)
     target = os.path.abspath(named)
     part = f"{target}.part"
@@ -178,7 +183,8 @@ def thumbnails(
     try:
         media.ffmpeg(
             [
-                "-i", src, "-map", "0:v:0", "-vf", vf, "-q:v", str(quality), "-start_number", "0",
+                "-i", src, "-map", "0:v:0", "-vf", vf, "-fps_mode", "passthrough", "-q:v", str(quality),
+                "-start_number", "0",
                 os.path.join(part, "%06d.jpg"),
             ],
             progress=progress,
