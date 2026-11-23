@@ -12,6 +12,7 @@ The two open issues, both reported from apps that had worked around them.
 - `src/strata_python/pages/render.py`: pypdfium2 sizes the bitmap with `ceil(points * scale)`. A 2660 px page at 500 dpi is 383.04 pt, stored a hair over, so it came back 2661 px (#27; strata-models#75 pasted it onto a white canvas). `rasterise` now crops to `round(points * scale)`; ceil is at most a pixel over round, so this only ever trims a sliver. pdfium's page sizes already follow `/Rotate`, so no swap is needed.
 - `tests/unit/test_oslib.py`: the nice value set absolutely from 5, kept from 15, and reaching 19 from -10. Each fails on the old code. Starting below 0 needs root with CAP_SYS_NICE, so that last case asks the kernel in a child first and skips with its reason where it is refused (CI is not root). `tests/unit/test_pages.py`: three scan sizes at 500 dpi and at half the dpi, and a rotated PDF.
 - `tests/unit/test_tasks.py`: CI on this branch caught a race in the `Detached` test that was already there. The child writes "done" and only then prints "finished", so the log could still be empty. The test now waits for the line.
+- `tests/unit/test_oslib.py`: the in-process test called `lower_priority(0)` to change nothing. Once the value is absolute, that raised the pytest process from -10 to 0 on the macOS runner, so the below-zero test's child could not start at -10. It now passes -20.
 
 ## 2026-11-14
 

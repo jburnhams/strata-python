@@ -117,7 +117,9 @@ def test_lower_priority_io_in_a_child_reaches_its_children():
 
 
 def test_lower_priority_in_this_process_with_no_change():
-    oslib.lower_priority(0)  # 0 is never above the current value, so this process keeps its priority
+    # -20 is never above the current value, so this process keeps its priority. Not 0: a macOS runner starts at -10,
+    # and raising this process to 0 kept the below-zero test's child from starting at -10 (PR #32's CI).
+    oslib.lower_priority(-20)
 
 
 @pytest.mark.skipif(oslib.WIN, reason="nice values are POSIX; Windows sets a priority class")
