@@ -38,7 +38,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from email.message import Message
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 Body = bytes | str | Any  # bytes and str are sent as they are; anything else as JSON
 
@@ -332,13 +332,17 @@ class FakeModels:
 
     `running_polls` is how many polls a job answers `running` before it finishes (default 1, as the real service
     usually is when the first poll arrives). A role with no result is refused with a 422, as the service refuses a role
-    it does not know. The registry answers each role's model from `.models` (role -> model name)."""
+    it does not know. The registry answers each role's model from `.models` (role -> model name). A job records the
+    settings it ran with when it starts, as the service does: `options` (`.options[role]`, the role's load options,
+    merged with the job's own) and `settings_hash` (a hash of the model and those options, also on the registry's roles),
+    so changing `.options` mid-test shows what an app's cache does when the service's settings change."""
 
     def __init__(self, results: Mapping[str, Result] | None = None, *, running_polls: int = 1) -> None:
         from fastapi import FastAPI, HTTPException, Request  # here, so importing the fakes does not load FastAPI
 
         self.results: dict[str, Result] = dict(MODELS_RESULTS if results is None else results)
         self.models: dict[str, str] = {}
+        self.options: dict[str, Json] = {}  # role -> the model's load options (the service's models.toml)
         self.running_polls = running_polls
         self.jobs: list[Json] = []  # every job submitted, in order, as the service stored it
         self.leases: list[Json] = []
@@ -349,6 +353,7 @@ class FakeModels:
         self.down = False
         self._failures: list[tuple[str | None, str]] = []
         self._polls: dict[int, int] = {}
+        self._asked: dict[int, Json] = {}  # job id -> the load options its submit asked for
         app = FastAPI()
         self.app = app
 
@@ -366,14 +371,25 @@ class FakeModels:
 
         @app.get("/api/registry")
         def registry() -> Json:  # pyright: ignore[reportUnusedFunction]
-            return {"roles": [{"key": r, "model": self.models.get(r, f"fake-{r}")} for r in self.results]}
+            return {
+                "roles": [{"key": r, "model": self._model(r), "settings_hash": self._hash(r)} for r in self.results]
+            }
 
         @app.post("/api/jobs")
         def submit(body: Json) -> Json:  # pyright: ignore[reportUnusedFunction]
             role = str(body.get("role"))
             if role not in self.results:
                 raise HTTPException(422, f"unknown role {role!r}")
-            job: Json = {**body, "id": len(self.jobs) + 1, "status": "queued", "result": None, "error": None}
+            job: Json = {
+                **body,
+                "id": len(self.jobs) + 1,
+                "status": "queued",
+                "result": None,
+                "error": None,
+                "options": None,  # what it runs with, recorded when it starts; the variant asked for is kept apart
+                "settings_hash": None,
+            }
+            self._asked[job["id"]] = cast("Json", body.get("options") or {})
             self.jobs.append(job)
             return dict(job)
 
@@ -382,6 +398,8 @@ class FakeModels:
             job = self._job(job_id, HTTPException)
             if job["status"] in ("queued", "running"):
                 n = self._polls[job_id] = self._polls.get(job_id, 0) + 1
+                if job["status"] == "queued":
+                    self._start(job)
                 if n <= self.running_polls:
                     job["status"] = "running"
                 else:
@@ -417,6 +435,24 @@ class FakeModels:
         """The next job (of `role`, when given) fails with `error`. Calls queue up: each failure is used once."""
         self._failures.append((role, error))
         return self
+
+    def _model(self, role: str, model: object = None) -> str:
+        return str(model) if model else self.models.get(role, f"fake-{role}")
+
+    def _hash(self, role: str, model: object = None, asked: Json | None = None) -> str:
+        import hashlib
+
+        options = {**self.options.get(role, {}), **(asked or {})}
+        text = json.dumps([self._model(role, model), options], sort_keys=True, default=str)
+        return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+    def _start(self, job: Json) -> None:
+        role, asked = str(job["role"]), self._asked.get(int(job["id"]), {})
+        job.update(
+            model=self._model(role, job.get("model")),
+            options={**self.options.get(role, {}), **asked},
+            settings_hash=self._hash(role, job.get("model"), asked),
+        )
 
     def _finish(self, job: Json) -> None:
         for i, (role, error) in enumerate(self._failures):

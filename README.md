@@ -14,10 +14,11 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 | `strata_python.files` | Atomic writes (`atomic_path` keeps the extension for ffmpeg, `atomic_open`, `write_json_atomic`, `write_text_atomic`, `write_bytes_atomic`), `read_json(path, default)`, `sha256`/`sha256_hex`, `quick_fingerprint` (size and both ends), `stat_key` (a cache key that follows the file), `inside(root, path)` (refuses `..` and links out), and `DiskCache` (values on disk with an age; `json(key, fetch, max_age_s)`) |
 | `strata_python.http` | `Http(user_agent, min_interval=...)`, the polite client for other people's APIs: a gap per host across threads (and processes with `throttle_file`), Retry-After as seconds or a date, a cool-down for a host that keeps saying 429, retries that never replay a write, a size cap, an optional `DiskCache`, and errors returned as a `Reply` (`raise_for_status()`, `get_json()` for code that wants exceptions) |
 | `strata_python.media` | `probe(path)` (a typed `Probe`: duration, format, tags, streams, chapters, ffprobe's warnings), `duration`, `ffmpeg(args, progress=...)` raising `MediaError` with ffmpeg's own reason, `available()` |
+| `strata_python.mediatime` | Exact time for media: `rational` seconds (Fraction), `Rate` (`frame_at`, `time_of`, `snap`), half-open `Span`, and `TimeMap` from an edit's output time to its sources and back, with exact JSON |
 | `strata_python.wav` | `read_wav(data_or_path, max_seconds=...)` checks an uploaded PCM WAV's header with the standard library (mono, 16 or 24-bit, 16 kHz and up by default; `channels`, `widths`, `min_rate`, `min_seconds` change it) and returns a `WavInfo`; anything else is a `WavError` (a `ValueError`, so a 400) with a sentence. strata-react's `useRecorder` writes what it accepts |
 | `strata_python.images` (extra `[images]`) | `thumbnail(src, px, cache_dir=...)` (an upright JPEG, made once, keyed on the file, never enlarged, the app's own reader through `make=`), `open_upright`, `flatten` (alpha and 16-bit greys to 8-bit RGB), `jpeg_bytes` |
 | `strata_python.stats` | Pairwise rankings and eval statistics in pure Python: `bradley_terry` (ties, an optional side advantage, Elo-scale `ratings()`), `intervals` (bootstrap), `head_to_head`, `votes_from(judgments)`, `wilson`, `mcnemar`, `holm` |
-| `strata_python.clients.models` | The strata-models client, standard library only: `run`, `submit`, `wait`, `role_model`, `gpu_lease`, a shortcut for every role the service runs (`faces`, `face_kind`, `transcribe`, `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed`, `enhance_video`, and `ask` for the language models) and a typed result for each |
+| `strata_python.clients.models` | The strata-models client, standard library only: `run`, `submit`, `wait`, `role_model`, `run_with_provenance` and `role_settings` (the model and settings a result was made with, for cache keys), `gpu_lease`, a shortcut for every role the service runs (`faces`, `face_kind`, `transcribe`, `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed`, `enhance_video`, and `ask` for the language models) and a typed result for each |
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
 | pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, `fake_models` (a stand-in strata-models), and the `integration` marker on everything under `tests/integration` |
 | `strata_python.testing` | The fakes behind those fixtures (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) `FakeModels`, the CLI runners `run_cli(main, *args)` and `run_module("myapp", *args, src=...)`, `assert_openapi_current(create_app, path)`, and `sine_wav(seconds, rate=, width=, channels=, amplitude=)` (real WAV bytes for upload tests) |
@@ -139,6 +140,8 @@ web.add_system(
     services={"strata-models": "http://127.0.0.1:8366"},
 )  # GET /api/system, a SystemInfo
 ```
+
+The app's own `/api/system` fields go in `extra=`, a function returning a mapping or a model. Give their model (`extra_model=AppNumbers`, or annotate the function `-> AppNumbers`) and the route's response is `<App>SystemInfo`, `SystemInfo` plus those fields, so the web app's type is `Schema<'MyappSystemInfo'>` with nothing added by hand.
 
 Delete the app's `guard()` (or each route's `try/except` raising `HTTPException`), passing its own exceptions as `add_error_handlers(app, {BookLocked: 423})`, and its `/api/system` route. Give `base_app` the same `commit=` so `/api/health` says which source the server runs. Declare a route's answer with a shape from `strata_python.contracts` (`response_model=Page[Task]`) where the app already returns that shape, so the web app's types can come from `/api/openapi.json`.
 
@@ -356,6 +359,7 @@ migrations = "migrations"        # the app's Alembic revisions, unchanged
   from strata_python.db.web import DbSession, add_database
 
   add_database(app, Project.load(__file__), default=lambda: local_url(SETTINGS))
+
 
   @app.get("/api/notes")
   def notes(db: DbSession) -> list[NoteOut]: ...

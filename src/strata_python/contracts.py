@@ -32,14 +32,16 @@ def utc(epoch: float | None) -> datetime.datetime | None:
 
 
 class ApiModel(BaseModel):
-    """A base for an app's own response models. pydantic marks a field with a default as optional in the schema, so
-    the generated TypeScript gets a `?` though the server always sends it; this config makes the response schema
-    say what is sent. Use it for responses: a request body built on it has an `-Input` and an `-Output` schema."""
+    """The base of the response shapes here, and for an app's own. pydantic marks a field with a default as optional in
+    the schema, so the generated TypeScript gets a `?` though the server always sends it; this config makes the
+    response schema say what is sent (`Page.next` is `string | null`, not `next?`). Use it for responses: a request
+    body built on it has an `-Input` and an `-Output` schema. `FileRef` and `Judgment` stay on `BaseModel`, since an
+    app may take them as a request body."""
 
     model_config = ConfigDict(json_schema_serialization_defaults_required=True)
 
 
-class Health(BaseModel):
+class Health(ApiModel):
     """What `GET /api/health` answers. Extra fields are the app's own (strata-models adds `gpu`)."""
 
     model_config = ConfigDict(extra="allow")
@@ -48,7 +50,7 @@ class Health(BaseModel):
     commit: str | None = None  # the source commit the server runs, so a probe can tell a stale deploy
 
 
-class Folder(BaseModel):
+class Folder(ApiModel):
     """A folder the app uses, and the disk it is on (None when the folder does not exist yet)."""
 
     name: str
@@ -58,7 +60,7 @@ class Folder(BaseModel):
     total_bytes: int | None = None
 
 
-class ServiceStatus(BaseModel):
+class ServiceStatus(ApiModel):
     """Another strata service this app calls, as its health endpoint answered just now."""
 
     name: str
@@ -68,7 +70,7 @@ class ServiceStatus(BaseModel):
     detail: str | None = None  # why it is not ok: not reachable, or what it answered
 
 
-class SystemInfo(BaseModel):
+class SystemInfo(ApiModel):
     """What `GET /api/system` answers: what is running, where its data is, and whether its services answer."""
 
     model_config = ConfigDict(extra="allow")
@@ -81,7 +83,7 @@ class SystemInfo(BaseModel):
     services: list[ServiceStatus] = Field(default_factory=lambda: [])
 
 
-class ErrorBody(BaseModel):
+class ErrorBody(ApiModel):
     """The body of every error the app answers. `detail` is what FastAPI already uses, so clients that read it keep
     working; `payload` carries what the error wants the client to have (the job row of a refused job)."""
 
@@ -93,7 +95,7 @@ TaskState = Literal["queued", "running", "done", "failed", "cancelled"]
 FINISHED: frozenset[str] = frozenset({"done", "failed", "cancelled"})
 
 
-class Progress(BaseModel):
+class Progress(ApiModel):
     """How far a task has got. `total` None means not known yet; `text` is the line a person reads ("Page 3 of 40")."""
 
     done: float = 0
@@ -107,7 +109,7 @@ class Progress(BaseModel):
         return None if not self.total else min(max(self.done / self.total, 0.0), 1.0)
 
 
-class Task(BaseModel):
+class Task(ApiModel):
     """A job or task row as an API answers it."""
 
     id: int | str
@@ -126,7 +128,7 @@ class Task(BaseModel):
 T = TypeVar("T")
 
 
-class Page(BaseModel, Generic[T]):  # Generic, not `Page[T]`: Python 3.11 is supported
+class Page(ApiModel, Generic[T]):  # Generic, not `Page[T]`: Python 3.11 is supported
     """One page of a list. `next` is an opaque cursor (pass it back as `after`), None on the last page; a cursor, not an
     offset, so rows added while a person pages through do not repeat or vanish."""
 

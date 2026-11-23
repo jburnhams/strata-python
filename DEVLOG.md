@@ -14,6 +14,28 @@ The owner asked for the recording studio's common code to live in the shared lib
 - `tests/unit/test_wav.py` (**new**): every refusal sentence, bytes and paths, a chunk that claims more than follows, and the tone's amplitude.
 - `README.md`, `AGENTS.md`, `CHANGELOG.md`: the module row, the layout line and the Unreleased entry.
 
+**Provenance for model results: `run_with_provenance`, `role_settings` (branch `claude/project-thread-3e79cp`)**
+strata-models issue #103: strata-reels stores every analysis result with the model, version and config that made it, and keys its cache on them. `role_model()` gives only the key, which stays the same when the service's models.toml changes a model's options, and `run()` dropped which model served the job. strata-models now records `options` and `settings_hash` on each job when it starts and shows `settings_hash` per role in `/api/registry`; this is the typed client side.
+- `src/strata_python/clients/models.py`: `Provenance` (`from_job`), `run_with_provenance`, `RoleSettings`, `role_settings`. New names rather than a flag on `run`/`role_model`, so their return types stay exact and existing callers are untouched.
+- `src/strata_python/testing.py`: `FakeModels.options` (role -> load options); a job records `model`, `options` (merged with the submit's own) and `settings_hash` when it starts, `null` while queued as on the service; the registry's roles carry `settings_hash`.
+- `tests/unit/test_clients_models.py`: the result with its provenance, the hash changing when the options change under the same key, a variant's options, a row from an older service.
+- README (clients row), CHANGELOG.
+
+**Issues #45 and #46: the shared responses and `/api/system`'s own fields, exact in the schema (branch `claude/project-thread-xzb4kc`)**
+
+The owner asked for the two issues raised while moving python-app-template onto 0.2.6. PR #42 had left the contracts on `BaseModel` so apps' generated types would not move; the template showed the move is what apps want (its `page.next ?? null`), and a field turning from optional to required only removes a `?`.
+
+- `src/strata_python/contracts.py`: `Health`, `Folder`, `ServiceStatus`, `SystemInfo`, `ErrorBody`, `Progress`, `Task` and `Page` on `ApiModel` (#45); `extra="allow"` merges with the inherited config. `FileRef` and `Judgment` stay on `BaseModel`: an app may take them as a request body, where `ApiModel` would split the component into `-Input` and `-Output`.
+- `src/strata_python/web.py`: `add_system` takes `extra_model`, or reads the model from `extra`'s return annotation, and declares a `SystemInfo` subclass with those fields named `<App>SystemInfo` after the app's title, as `Settings.model()` names `<App>Settings` (#46). A distinct name, not `SystemInfo` again: two components of one name make FastAPI fall back to long module-path names. `extra` may return the model itself.
+- `tests/unit/test_contracts.py`: every response shape lists all its fields as required, and `Page[Task]` in a served schema; `tests/unit/test_web.py`: the extra fields in the served schema, inferred and named, and the plain mapping unchanged.
+- README (server section), CHANGELOG.
+
+**Exact media time: `mediatime` (branch `claude/project-thread-1p0er6`)**
+strata-reels, the new video editor (milestone R1 of its plan: a digitised tape in, a highlight reel out), needs time that does not drift: source, edit and render time kept apart, frame-exact on 25 fps PAL and 30000/1001 NTSC, with the map from an edit back to its sources. strata-360 had its own (float seconds plus a UTC map); strata-vid keeps float seconds and its cuts drift. Both are apps that need the same thing, so it lives here. Rationals (the standard library's `Fraction`) rather than integer ticks: a tick base has to be chosen to fit every rate at once, a Fraction fits any, and the numbers here are small.
+- `src/strata_python/mediatime.py`: **new**. `rational`, `text`, `Rate`, `Span`, `Piece`, `TimeMap`. Spans are half-open, so two shots that meet share no frame; snapping goes to the earlier frame at exactly halfway, so a cut never moves past the frame it was in; a float is read by its shortest repr, so 0.1 is 1/10.
+- `tests/unit/test_mediatime.py`: **new**; includes 300 random edits at five rates where output, source and output again land on the same time exactly, and the float drift it replaces (0.04 added a thousand times lands a frame early).
+- `CHANGELOG.md` (Unreleased, Added), `README.md` (the module table).
+- Review: `Span.overlaps` said an empty span inside another overlapped it while `&` said they share nothing; it is now `&`'s answer (`mediatime.py`, a test in `test_mediatime.py`).
 
 **Issues #36 to #41: public-check for web apps, an openapi command, settings enums, and a server's records (branch `claude/project-thread-xzb4kc`)**
 

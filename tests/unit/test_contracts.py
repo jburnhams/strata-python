@@ -59,3 +59,39 @@ def test_api_model_makes_defaulted_fields_required_in_the_response_schema():
     assert "required" not in Plain.model_json_schema(mode="serialization")
     assert Exact.model_json_schema(mode="serialization")["required"] == ["n"]
     assert Exact().n == 0  # still optional to construct
+
+
+@pytest.mark.parametrize(
+    ("model", "fields"),
+    [
+        (c.Page[int], {"items", "next", "total"}),
+        (c.Health, {"ok", "version", "commit"}),
+        (c.SystemInfo, {"version", "commit", "python", "platform", "started_at", "folders", "services"}),
+        (c.Folder, {"name", "path", "exists", "free_bytes", "total_bytes"}),
+        (c.ServiceStatus, {"name", "url", "ok", "version", "detail"}),
+        (c.ErrorBody, {"detail", "payload"}),
+        (c.Progress, {"done", "total", "text", "stage", "at"}),
+    ],
+)
+def test_shared_responses_list_every_field_they_send_as_required(model, fields):
+    """Issue #45: `Page.next` came out `next?: string | null` in the web app's types though it is always sent."""
+    assert set(model.model_json_schema(mode="serialization")["required"]) == fields
+
+
+def test_shared_responses_in_the_served_schema(live_app):
+    import json
+    import urllib.request
+
+    from fastapi import FastAPI
+
+    app = FastAPI()
+
+    @app.get("/page", response_model=c.Page[c.Task])
+    def page() -> c.Page[c.Task]:
+        return c.Page(items=[])
+
+    with live_app(app) as base, urllib.request.urlopen(base + "/openapi.json") as r:
+        schemas = json.load(r)["components"]["schemas"]
+    assert "next" in schemas["Page_Task_"]["required"]
+    assert {"error", "progress", "attempts"} <= set(schemas["Task"]["required"])
+    assert c.Health(ok=True, version="1", gpu="x").model_dump()["gpu"] == "x"  # extra fields still allowed

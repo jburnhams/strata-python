@@ -8,6 +8,18 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 - `strata_python.wav`: `read_wav(data_or_path, *, channels=1, widths=(2, 3), min_rate=16_000, min_seconds=0.0, max_seconds=None)` returns a `WavInfo` (`sample_rate`, `sample_width`, `channels`, `frames`, `seconds`) or raises `WavError` (a `ValueError`, answered as a 400) with a sentence, for an app that takes recorded speech (strata-react's `useRecorder` uploads). Replace the app's own `wave` header check.
 - `strata_python.testing.sine_wav(seconds, *, rate, width, channels, hz, amplitude)`: real PCM WAV bytes for an app's upload tests.
+- `clients.models.run_with_provenance(...)` returns `(result, Provenance)`: the job's `model`, the load `options` it ran with, its `settings_hash` and `job_id`; `Provenance.from_job(row)` reads the same from any job row. `clients.models.role_settings(role)` returns `RoleSettings(model, settings_hash)`. Key a result cache on `(model, settings_hash)` so it is made again when strata-models changes a model's options under the same key (strata-models #103; the hash and options are None from a service older than that). `FakeModels.options[role]` sets the stand-in's load options, and its jobs and registry carry the same fields.
+
+## 0.2.7 (2026-11-23)
+
+### Added
+
+- `strata_python.mediatime`: exact time for media. `rational(...)` (seconds as a `Fraction` from an int, "p/q" or decimal text, a Decimal, or a float by its shortest repr), `Rate` (`parse("30000/1001")`, `frame_at`, `time_of`, `snap`), `Span` (half-open `[start, end)`: `duration`, `in`, `&`, `overlaps` (an empty span overlaps nothing), `shift`, `frames(rate)`), `Piece` and `TimeMap` (an edit's output time to its sources and back: `sequence(ranges)`, `to_source(t)`, `to_output(source, t)`), all with exact JSON (`text`, `to_json`, `from_json`).
+- `web.add_system(..., extra_model=AppNumbers)` (or `extra` annotated `-> AppNumbers`, which may return the model): the route's response is `<App>SystemInfo`, `SystemInfo` plus the app's fields, so they are in `/api/openapi.json` and the generated types (#46). Replace the hand-written `Schema<'SystemInfo'> & {...}` with `Schema<'<App>SystemInfo'>`. Without a model, `extra` works as before.
+
+### Changed
+
+- The response contracts (`Page`, `Health`, `SystemInfo`, `Folder`, `ServiceStatus`, `ErrorBody`, `Task`, `Progress`) are built on `ApiModel`, so a field with a default is required in the response schema: `Page.next` is `string | null` in the generated types, not `next?` (#45). Drop the app's `page.next ?? null` and similar fill-ins. An app that takes one of them as a request body gets `-Input` and `-Output` schemas for it.
 
 ## 0.2.6 (2026-11-23)
 
