@@ -276,3 +276,43 @@ def test_settings_routes_describe_each_setting_in_openapi(live_app, tmp_path):
     assert schema["properties"]["greeting"]["type"] == "string"
     assert schema["properties"]["roots"]["type"] == "array"
     assert set(schema["required"]) == {"greeting", "roots"}
+
+
+def test_a_setting_with_choices_is_an_enum_and_numbers_are_numbers(live_app, isolated_env):
+    """Issue #41: the schema says which values a setting takes, so the web app's type needs no narrowing by hand."""
+    from strata_python.settings import number_between, one_of, whole_between
+
+    declared = [
+        Setting("mode", default="mixed", choices=["mixed", "review"]),
+        Setting("speed", default="Slow", normalise=one_of(["Slow", "Fast"])),
+        Setting("workers", default="2", normalise=whole_between(1, 16)),
+        Setting("memory", default="8", normalise=number_between(0.5, 64)),
+    ]
+    as_text = Settings("demo", declared)
+    with live_app(web.base_app("demo", "1", as_text)) as base, urllib.request.urlopen(base + "/api/openapi.json") as r:
+        props = json.load(r)["components"]["schemas"]["DemoSettings"]["properties"]
+        assert props["mode"]["enum"] == ["mixed", "review"]
+        assert props["speed"]["enum"] == ["Slow", "Fast"]
+        assert props["workers"]["type"] == "string"  # numbers=False (the default) leaves the wire as it was
+        assert json.loads(get(base + "/api/settings")[1])["workers"] == "2"
+        status, text = put(base + "/api/settings", {"mode": "REVIEW "})
+        assert (status, json.loads(text)["mode"]) == (200, "review")
+        status, text = put(base + "/api/settings", {"mode": "other"})
+        assert status == 400
+        assert "must be one of mixed, review" in text
+
+    typed = Settings("demo", declared, numbers=True)
+    with live_app(web.base_app("demo", "1", typed)) as base, urllib.request.urlopen(base + "/api/openapi.json") as r:
+        props = json.load(r)["components"]["schemas"]["DemoSettings"]["properties"]
+        assert props["workers"] | {"title": ""} == {"type": "integer", "minimum": 1, "maximum": 16, "title": ""}
+        assert (props["memory"]["type"], props["memory"]["minimum"], props["memory"]["maximum"]) == ("number", 0.5, 64)
+        assert json.loads(get(base + "/api/settings")[1]) == {
+            "mode": "review",
+            "speed": "Slow",
+            "workers": 2,
+            "memory": 8,
+        }
+        status, text = put(base + "/api/settings", {"workers": 4, "memory": 8.5})
+        assert (status, json.loads(text)["workers"], json.loads(text)["memory"]) == (200, 4, 8.5)
+        assert typed.get("workers") == "4"
+        assert put(base + "/api/settings", {"workers": 40})[0] == 400

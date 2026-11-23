@@ -1,6 +1,6 @@
 """strata-db: the app-facing command line (run from anywhere inside the app's repo; also `python -m strata_python.db`).
 
-  strata-db init --app NAME --models pkg.models:Base [--engine portable|postgres]
+  strata-db init --app NAME --models pkg.models:Base [--engine portable|postgres] [--package src/pkg]
                               add [tool.strata-db] to pyproject.toml and create migrations/
   strata-db new-app [NAME]    on the shared server: owner role NAME (NOLOGIN, you are a member) and schema NAME in
                               the shared database, owned by it, no USAGE for PUBLIC (other app roles cannot see it).
@@ -33,7 +33,7 @@ from . import migrations as m
 from .config import normalise_url, resolve_url, shared_database
 from .engine import connect
 from .guard import LIVE, LiveDatabaseRefused, allow_live
-from .project import TABLE, Project
+from .project import FILE, TABLE, Project
 from .scratch import live_admin_url, pg_available, scratch_database
 from .testing import scratch_engine
 
@@ -41,18 +41,29 @@ NAME = re.compile(r"[a-z][a-z0-9_]*")  # role and schema names: nothing that nee
 
 
 def cmd_init(a: argparse.Namespace) -> None:
+    """Write the declaration: into pyproject.toml, or with --package into the package's strata-db.toml (migrations
+    beside it, so an installed wheel carries both) with a pointer to it in pyproject.toml."""
     pp = Path.cwd() / "pyproject.toml"
     body = pp.read_text(encoding="utf-8") if pp.exists() else f'[project]\nname = "{a.app}"\nversion = "0.1.0"\n'
     if f"[tool.{TABLE}]" in body:
         sys.exit(f"{pp} already has [tool.{TABLE}]")
-    body = (
-        body.rstrip("\n") + f'\n\n[tool.{TABLE}]\napp = "{a.app}"\nmodels = "{a.models}"\nmigrations = "migrations"\n'
-    )
+    keys = f'app = "{a.app}"\nmodels = "{a.models}"\nmigrations = "migrations"\n'
     if a.engine != "portable":
-        body += f'engine = "{a.engine}"\n'
+        keys += f'engine = "{a.engine}"\n'
+    if a.package:
+        pkg = Path(a.package)
+        if not (Path.cwd() / pkg / "__init__.py").is_file():
+            sys.exit(f"{pkg} is not a package folder (no __init__.py)")
+        (Path.cwd() / pkg / FILE).write_text(keys, encoding="utf-8")
+        (Path.cwd() / pkg / "migrations").mkdir(exist_ok=True)
+        body = body.rstrip("\n") + f'\n\n[tool.{TABLE}]\nfile = "{(pkg / FILE).as_posix()}"\n'
+        where = f"{(pkg / FILE).as_posix()} (pointed to from {pp.name}); {(pkg / 'migrations').as_posix()}/ ready"
+    else:
+        body = body.rstrip("\n") + f"\n\n[tool.{TABLE}]\n{keys}"
+        (Path.cwd() / "migrations").mkdir(exist_ok=True)
+        where = f"[tool.{TABLE}] to {pp}; migrations/ ready"
     pp.write_text(body, encoding="utf-8")
-    (Path.cwd() / "migrations").mkdir(exist_ok=True)
-    print(f"wrote [tool.{TABLE}] to {pp}; migrations/ ready. Next: strata-db revision -m 'initial'")
+    print(f"wrote {where}. Next: strata-db revision -m 'initial'")
 
 
 def cmd_new_app(a: argparse.Namespace) -> None:
@@ -103,7 +114,9 @@ def cmd_revision(a: argparse.Namespace) -> None:
         path = m.revision(eng, p.migrations_dir, p.metadata, a.message, autogenerate=not a.empty)
         eng.dispose()
     if path:
-        print(f"wrote {Path(path).relative_to(p.root).as_posix()}: review it, then commit it")
+        shown = Path(path).resolve()
+        shown = shown.relative_to(Path.cwd().resolve()) if shown.is_relative_to(Path.cwd().resolve()) else shown
+        print(f"wrote {shown.as_posix()}: review it, then commit it")
     else:
         print("no changes: the models match the migrations")
 
@@ -162,6 +175,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--app", required=True)
     s.add_argument("--models", required=True)
     s.add_argument("--engine", choices=["portable", "postgres"], default="portable")
+    s.add_argument("--package", metavar="DIR", help="declare in DIR/strata-db.toml, so an installed wheel has it")
     s.set_defaults(f=cmd_init)
     s = sub.add_parser("new-app", help="role and schema on the shared server")
     s.add_argument("name", nargs="?")

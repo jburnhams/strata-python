@@ -5,6 +5,7 @@ no mocks. Tests that rewrite an app's models after importing them run strata-db 
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
@@ -27,6 +28,7 @@ from strata_python.db.migrations import check_migrations, current, drift, lint_r
 from strata_python.db.project import Project
 from strata_python.db.scratch import admin_url, drop_pg, pg_available, pg_url, scratch_database
 from strata_python.db.testing import scratch_engine
+from strata_python.db.web import DbSession, add_database, database  # module level: routes' annotations are strings here
 from strata_python.testing import CliResult, run_cli
 
 # Postgres tests need a throwaway server. CI installs one and sets STRATA_TEST_PG=1, so there a missing server fails
@@ -354,6 +356,53 @@ def test_init_writes_config(app: Path):
     with pytest.raises(FileNotFoundError, match=r"\[tool.strata-db\]"):
         Project.load(app.parent)
     assert Project.load(app / "pyproject.toml").root == app  # from a file: its folder and up
+
+
+def test_a_declaration_inside_the_package_works_from_an_installed_wheel(tmp_path: Path):
+    """Issue #40: `strata-db init --package` puts the keys and migrations in the package; strata-db follows the
+    pointer from pyproject.toml, and a copy of the package with no pyproject.toml (as in site-packages) still finds
+    the declaration from its own module and migrates."""
+    name = f"t{uuid.uuid4().hex[:8]}"
+    repo = tmp_path / "repo"
+    pkg = repo / "src" / name
+    (pkg / "learners").mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "learners" / "__init__.py").write_text("")
+    (pkg / "learners" / "models.py").write_text(textwrap.dedent(MODELS_V1))
+    out = strata_db(repo, "init", "--app", name, "--models", f"{name}.learners.models:Base", "--package", f"src/{name}")
+    assert f"src/{name}/strata-db.toml" in out.stdout
+    assert f'file = "src/{name}/strata-db.toml"' in (repo / "pyproject.toml").read_text()
+    assert "wrote src/" in strata_db(repo, "revision", "-m", "initial", "--sqlite").stdout
+    from_repo = Project.load(repo)
+    assert from_repo.migrations_dir == pkg / "migrations"
+    assert "things" in from_repo.metadata.tables
+
+    site = tmp_path / "site-packages"
+    shutil.copytree(pkg, site / name)
+    installed = Project.load(site / name / "learners" / "db.py")  # what `Project.load(__file__)` passes
+    assert (installed.root, installed.app) == (site / name, name)
+    assert installed.migrations_dir == site / name / "migrations"
+    eng = db.connect(str(tmp_path / "live.db"))
+    installed.upgrade(eng)
+    assert current(eng) is not None
+    assert drift(eng, installed.metadata) == []
+    eng.dispose()
+
+    assert strata_db(repo, "init", "--app", "x", "--models", "m:B", "--package", "nowhere", check=False).code != 0
+    (repo / "pyproject.toml").write_text('[tool.strata-db]\nfile = "missing.toml"\n')
+    with pytest.raises(FileNotFoundError, match=r"missing\.toml"):
+        Project.load(repo)
+
+
+def test_an_unimported_package_declaration_puts_the_folder_above_its_top_package_on_the_path(tmp_path: Path):
+    name = f"t{uuid.uuid4().hex[:8]}"
+    sub = tmp_path / name / "inner"
+    sub.mkdir(parents=True)
+    (tmp_path / name / "__init__.py").write_text("")
+    (sub / "__init__.py").write_text("")
+    (sub / "models.py").write_text(textwrap.dedent(MODELS_V1))
+    (sub / "strata-db.toml").write_text(f'app = "{name}"\nmodels = "{name}.inner.models:Base"\n')
+    assert "things" in Project.load(sub).metadata.tables
 
 
 def test_init_creates_pyproject_and_postgres_engine(tmp_path: Path):
@@ -907,6 +956,7 @@ def test_pg_and_strata_pg_are_offered_once_on(pytester: pytest.Pytester):
 
 
 OFF_TESTS = """
+import contextlib
 import os
 
 import psycopg
@@ -984,3 +1034,104 @@ def test_new_app_as_a_createrole_login_that_is_not_superuser(tmp_path: Path, mon
             c.execute(text(f'DROP ROLE IF EXISTS "{name}"'))
             c.execute(text(f'DROP ROLE IF EXISTS "{creator}"'))
         adm.dispose()
+
+
+# --- serving records (issue #39) ----------------------------------------------------------------------------------
+
+
+def test_local_url_and_a_default_when_nothing_is_configured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from strata_python.settings import Settings
+
+    monkeypatch.delenv("STRATA_DB_DATABASE", raising=False)
+    monkeypatch.setenv("DEMO_HOME", str(tmp_path / "home"))
+    local = db.local_url(Settings("demo", []))
+    assert local == "sqlite:///" + str(tmp_path / "home" / "demo.db")
+    assert db.local_url(tmp_path, "x") == "sqlite:///" + str(tmp_path / "x.db")
+    with pytest.raises(ValueError, match="app name"):
+        db.local_url(tmp_path)
+    assert url_for("demo", default=local) == local
+    monkeypatch.setenv("DEMO_DATABASE_URL", str(tmp_path / "set.db"))
+    assert url_for("demo", default=local).endswith("set.db")  # a configured URL wins
+    monkeypatch.delenv("DEMO_DATABASE_URL")
+    monkeypatch.setenv("STRATA_DB_DATABASE", "shared")
+    assert resolve_url("demo", default=local).startswith("postgresql")  # so does a named shared database
+    monkeypatch.delenv("STRATA_DB_DATABASE")
+    pg = resolve_url("demo", "other", default="postgresql://h/db")  # a Postgres fallback reads the app's schema
+    assert pg == "postgresql+psycopg://h/db?options=-csearch_path%3Dother"
+
+
+def test_project_open_connects_and_migrates_making_the_folder(app: Path, tmp_path: Path):
+    strata_db(app, "revision", "-m", "initial", "--sqlite")
+    p = Project.load(app)
+    eng = p.open(default=str(tmp_path / "not" / "yet" / "app.db"))
+    assert (tmp_path / "not" / "yet" / "app.db").is_file()
+    assert drift(eng, p.metadata) == []
+    eng.dispose()
+    (p.migrations_dir / "broken.py").write_text("revision = 'x'\ndown_revision = 'missing'\n")
+    with pytest.raises(Exception, match="missing"):
+        p.open(f"sqlite:///{tmp_path / 'other.db'}")
+
+
+def test_add_database_opens_lazily_serves_a_session_per_request_and_disposes(app: Path, tmp_path: Path, live_app):
+    import json
+    import urllib.request
+
+    from fastapi import FastAPI
+
+    strata_db(app, "revision", "-m", "initial", "--sqlite")
+    project = Project.load(app)
+    file = tmp_path / "home" / "records.db"
+    events: list[str] = []
+    seen: list[Session] = []
+
+    @contextlib.asynccontextmanager
+    async def own_lifespan(_app):
+        events.append("start")
+        yield
+        events.append("stop")
+
+    server = FastAPI(lifespan=own_lifespan)
+    with pytest.raises(RuntimeError, match="add_database"):
+        database(server)
+    holder = add_database(server, project, default=lambda: str(file))
+
+    @server.get("/plain")
+    def plain() -> dict[str, bool]:
+        return {"ok": True}
+
+    @server.get("/count")
+    def count(s: DbSession) -> dict[str, int]:
+        seen.append(s)
+        return {"n": len(s.execute(text("SELECT * FROM things")).all())}
+
+    with live_app(server) as base:
+        with urllib.request.urlopen(base + "/plain") as r:
+            assert json.load(r) == {"ok": True}
+        assert not file.exists()  # a server nobody records on never creates a database
+        assert not holder.opened
+        for _ in range(2):
+            with urllib.request.urlopen(base + "/count") as r:
+                assert json.load(r) == {"n": 0}
+        assert file.is_file()
+        assert holder.opened
+        assert seen[0] is not seen[1]
+    assert events == ["start", "stop"]  # the app's own lifespan still runs
+    assert not holder.opened  # disposed when the server stopped
+
+
+def test_a_database_that_fails_to_open_is_tried_again(app: Path, tmp_path: Path):
+    from strata_python.db.web import Database
+
+    strata_db(app, "revision", "-m", "initial", "--sqlite")
+    holder = Database(Project.load(app), default=str(tmp_path / "a.db"))
+    holder.close()  # never opened: nothing to dispose
+    blocker = tmp_path / "blocked"
+    blocker.write_text("")  # a file where the folder should be
+    holder.default = str(blocker / "b.db")
+    with pytest.raises(FileExistsError):
+        holder.engine()
+    assert not holder.opened
+    holder.default = None
+    holder.url = "sqlite:///:memory:"
+    assert holder.engine() is holder.engine()
+    holder.close()

@@ -15,6 +15,7 @@ Testing policy).
   FakeRun          `subprocess.run` / `check_output`; `.returns` maps a command-line substring to stdout, `.code` fails
   Sleeper          `time.sleep` that returns at once and records `.delays`
   run_cli          an argparse `main(argv)` in this process -> CliResult; run_module the same as a real `python -m`
+  assert_openapi_current  the committed schema file equals what the app answers now (cli.add_openapi writes it)
   FakeModels       a stand-in strata-models service (jobs, leases, registry) for `strata_python.clients.models`; served
                    by the `fake_models` fixture. MODELS_RESULTS holds one reply per role in the service's shapes.
 """
@@ -299,6 +300,18 @@ for _role in ("transcribe-fast",):
     MODELS_RESULTS[_role] = MODELS_RESULTS["transcribe"]
 for _role in ("text", "judge-text", "judge-vision", "judge-audio"):
     MODELS_RESULTS[_role] = MODELS_RESULTS["vision-language"]
+
+
+def assert_openapi_current(create_app: Callable[[], Any], path: str | os.PathLike[str]) -> None:
+    """Fail, with the command to run, when the committed OpenAPI file at `path` is not what `create_app()` answers
+    now: the unit test every app with generated web types writes."""
+    from strata_python.web import openapi_text  # FastAPI only when asked
+
+    file = Path(path)
+    current = file.read_text(encoding="utf-8") if file.is_file() else None
+    if current != openapi_text(create_app()):
+        state = "missing" if current is None else "out of date"
+        raise AssertionError(f"{file} is {state}: run the app's `openapi` command and commit the file")
 
 
 class FakeModels:
