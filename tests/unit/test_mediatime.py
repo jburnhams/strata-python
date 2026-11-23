@@ -56,6 +56,8 @@ def test_spans_are_half_open():
     assert F(9, 2) in a
     assert "3" not in a
     assert not a.overlaps(b)
+    assert a.overlaps(Span.of(4, 9))
+    assert not a.overlaps(Span.of(3, 3))  # an empty span holds no time, even inside another
     assert (a & b) is None
     assert (a & Span.of(4, 9)) == Span.of(4, 5)
     assert a.shift(F(1)) == Span.of(3, 6)

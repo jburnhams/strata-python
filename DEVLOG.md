@@ -9,6 +9,7 @@ strata-reels, the new video editor (milestone R1 of its plan: a digitised tape i
 - `src/strata_python/mediatime.py`: **new**. `rational`, `text`, `Rate`, `Span`, `Piece`, `TimeMap`. Spans are half-open, so two shots that meet share no frame; snapping goes to the earlier frame at exactly halfway, so a cut never moves past the frame it was in; a float is read by its shortest repr, so 0.1 is 1/10.
 - `tests/unit/test_mediatime.py`: **new**; includes 300 random edits at five rates where output, source and output again land on the same time exactly, and the float drift it replaces (0.04 added a thousand times lands a frame early).
 - `CHANGELOG.md` (Unreleased, Added), `README.md` (the module table).
+- Review: `Span.overlaps` said an empty span inside another overlapped it while `&` said they share nothing; it is now `&`'s answer (`mediatime.py`, a test in `test_mediatime.py`).
 
 **Issues #36 to #41: public-check for web apps, an openapi command, settings enums, and a server's records (branch `claude/project-thread-xzb4kc`)**
 

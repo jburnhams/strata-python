@@ -112,7 +112,8 @@ class Span:
         return isinstance(t, (int, Fraction)) and self.start <= t < self.end
 
     def overlaps(self, other: Span) -> bool:
-        return self.start < other.end and other.start < self.end
+        """They share some time; an empty span shares none, even inside another (the same answer as `&`)."""
+        return (self & other) is not None
 
     def __and__(self, other: Span) -> Span | None:
         """The overlap of two spans, or None when they share no time."""
