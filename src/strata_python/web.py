@@ -148,7 +148,10 @@ def _read_head(dot: str) -> str | None:
     return None
 
 
-ErrorMap = Mapping[type[Exception], int]
+Status = int | Callable[[Exception], int]
+"""A status, or a function of the exception giving one: one class can mean two answers by its cause (a service's
+error is a 503 when the service is not configured here and a 502 when it is configured but failed)."""
+ErrorMap = Mapping[type[Exception], Status]
 DEFAULT_ERRORS: ErrorMap = {
     ValueError: 400,  # a request the app cannot use (pydantic's ValidationError is one too)
     PermissionError: 403,
@@ -164,14 +167,17 @@ def add_error_handlers(app: FastAPI, errors: ErrorMap | None = None, *, defaults
     """Answer the app's own exceptions as HTTP errors with an `ErrorBody` ({detail, payload}), instead of a
     `try/except` and `HTTPException` in every route (the `guard()` five servers wrote). `errors` maps an exception
     class to a status and is added to `DEFAULT_ERRORS` (pass `defaults=False` for only yours); a subclass takes the
-    closest mapped class. An exception's `.payload`, when it has one, is sent as `payload`."""
+    closest mapped class. A status may be a function of the exception
+    (`{YoutubeError: lambda e: 503 if not youtube.configured() else 502}`), so the answer keeps the one shape when its
+    status depends on the cause. An exception's `.payload`, when it has one, is sent as `payload`."""
     table = {**(DEFAULT_ERRORS if defaults else {}), **(errors or {})}
 
-    def handler(status: int) -> Callable[[Request, Exception], JSONResponse]:
+    def handler(status: Status) -> Callable[[Request, Exception], JSONResponse]:
         def answer(request: Request, e: Exception) -> JSONResponse:
             detail = str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e) or type(e).__name__
             body = ErrorBody(detail=detail, payload=getattr(e, "payload", None))
-            return JSONResponse(body.model_dump(mode="json"), status_code=status)
+            code = status if isinstance(status, int) else status(e)
+            return JSONResponse(body.model_dump(mode="json"), status_code=code)
 
         return answer
 

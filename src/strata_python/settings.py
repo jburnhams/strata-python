@@ -12,7 +12,7 @@ An app declares its settings once (`Setting`: key, default, optional normaliser)
     SETTINGS.save({"greeting": "Hi"}) # validated, written atomically; None resets to the default
 
 Order of precedence: environment variable (`<APP>_<KEY>`, upper-cased, or the name given), then the store, then the default. The folder holding the file is `~/.<app>`, moved
-with `<APP>_HOME`. A stored or environment value that fails its normaliser is ignored (the default applies) rather than crashing the app at start; only `save` raises.
+with `<APP>_HOME`. A stored or environment value that fails its normaliser is ignored (the default applies, and the log says so once) rather than crashing the app at start; only `save` raises.
 Values are canonical strings (a normaliser returns the one spelling it accepts), and lists of them: the file is edited by hand as well as by the app.
 
 `Settings.model()` describes them for `/api/openapi.json`: a setting with `choices` (or `normalise=one_of(...)`) is a
@@ -25,6 +25,7 @@ Where the values live is a `SettingsStore`: the JSON file by default; `Settings.
 
 import datetime
 import json
+import logging
 import math
 import os
 import re
@@ -35,6 +36,8 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol, cast
 
 from strata_python.oslib import file_lock
+
+log = logging.getLogger(__name__)
 
 
 def non_empty(value: str) -> str:
@@ -56,36 +59,56 @@ def absolute_path(value: str) -> str:
 @dataclass(frozen=True)
 class number_between:  # lower case: used as a normaliser function, and was one before it carried its range
     """Normaliser: a finite number from `lo` to `hi` (GB of memory, a budget in dollars), written the shortest way
-    (`"8"`, `"8.5"`). Its range is visible, so `Settings(numbers=True)` puts it in the schema."""
+    (`"8"`, `"8.5"`). `hi=None` has no ceiling; `lo_open=True` refuses `lo` itself, for a value that must be more than
+    0 but has no natural floor (a cache size, a half-life: 0 would empty the cache or divide by zero, while tests use
+    `1e-9`). `positive()` is that case. Its range is visible, so `Settings(numbers=True)` puts it in the schema
+    (`exclusiveMinimum` when `lo_open`)."""
 
     lo: float
-    hi: float
+    hi: float | None = None
+    lo_open: bool = False
 
     def __call__(self, value: str) -> str:
         try:
             x = float(value.strip())
         except ValueError:
             raise ValueError("must be a number") from None
-        if not math.isfinite(x) or not self.lo <= x <= self.hi:
-            raise ValueError(f"must be a number from {_num(self.lo)} to {_num(self.hi)}")
+        low_ok = x > self.lo if self.lo_open else x >= self.lo
+        if not math.isfinite(x) or not low_ok or (self.hi is not None and x > self.hi):
+            raise ValueError(self._range())
         return _num(x)
+
+    def _range(self) -> str:
+        lo, hi = _num(self.lo), None if self.hi is None else _num(self.hi)
+        if self.lo_open:
+            return f"must be more than {lo}" + ("" if hi is None else f" and at most {hi}")
+        return f"must be a number from {lo} to {hi}" if hi is not None else f"must be a number of at least {lo}"
+
+
+def positive(hi: float | None = None) -> number_between:
+    """Normaliser: a number more than 0 (up to `hi`, when given): `number_between(0, hi, lo_open=True)`."""
+    return number_between(0, hi, lo_open=True)
 
 
 @dataclass(frozen=True)
 class whole_between:  # lower case: as number_between
-    """Normaliser: a whole number from `lo` to `hi` (job slots, a port). Its range is visible, so
-    `Settings(numbers=True)` puts it in the schema."""
+    """Normaliser: a whole number from `lo` to `hi` (job slots, a port); `hi=None` has no ceiling (a per-day limit).
+    Its range is visible, so `Settings(numbers=True)` puts it in the schema."""
 
     lo: int
-    hi: int
+    hi: int | None = None
 
     def __call__(self, value: str) -> str:
         try:
             x = int(value.strip())
         except ValueError:
             raise ValueError("must be a whole number") from None
-        if not self.lo <= x <= self.hi:
-            raise ValueError(f"must be a whole number from {self.lo} to {self.hi}")
+        if x < self.lo or (self.hi is not None and x > self.hi):
+            raise ValueError(
+                f"must be a whole number from {self.lo} to {self.hi}"
+                if self.hi is not None
+                else f"must be a whole number of at least {self.lo}"
+            )
         return str(x)
 
 
@@ -172,10 +195,24 @@ class Setting:
 
     def parse(self, raw: object) -> str:
         """A stored, environment or saved value as its canonical string; ValueError when it is not acceptable."""
-        if not isinstance(raw, str):
-            raise ValueError("must be text")  # str(5) would pass a hand-edited number off as a deliberate string
-        v = self.normalise(raw)
+        v = self.normalise(self._text(raw))
         return v if self.choices is None else one_of(self.choices)(v)
+
+    def _text(self, raw: object) -> str:
+        # A JSON number or boolean is accepted where the normaliser reads one: an app's own settings file from before
+        # it moved onto Settings usually stored them that way (issue #52), and so does a hand edit that writes 720 for
+        # "720". Anywhere else str(5) would pass a hand-edited number off as a deliberate string, so it is refused.
+        n = self.normalise
+        if isinstance(raw, str):
+            return raw
+        if isinstance(raw, bool):
+            if n is boolean:
+                return "true" if raw else "false"
+        elif isinstance(raw, int | float) and isinstance(n, number_between | whole_between):
+            return (
+                str(raw) if isinstance(raw, int) else _num(raw)
+            )  # 720.0 reads as "720", so a whole number stored as a float still passes whole_between
+        raise ValueError("must be text")
 
     def allowed(self) -> tuple[str, ...] | None:
         """The fixed set of values, from `choices` or a `one_of` normaliser, else None."""
@@ -297,6 +334,7 @@ class Settings:
         self._by_key: dict[str, AnySetting] = {s.key: s for s in settings}
         self.file = JsonFileStore(self.path)
         self.store: SettingsStore = store or self.file
+        self._ignored: set[tuple[str, str, str]] = set()
 
     @property
     def keys(self) -> tuple[str, ...]:
@@ -351,13 +389,23 @@ class Settings:
     def value(self, key: str) -> Value:
         """The setting's value: a string, or a list of strings for a `ListSetting`."""
         s = self._by_key[key]
-        for raw in (os.environ.get(self.env_name(key)), self.load().get(key)):
+        env = self.env_name(key)
+        for where, raw in ((env, os.environ.get(env)), ("the settings", self.load().get(key))):
             if raw is not None:  # "" is a value; the normaliser decides whether it is acceptable
                 try:
                     return s.parse(raw)
-                except ValueError:
+                except ValueError as e:
+                    self._warn_ignored(key, where, raw, e)
                     continue
         return s.parse(s.default_value())
+
+    def _warn_ignored(self, key: str, where: str, raw: object, e: ValueError) -> None:
+        # A value that is ignored is said once (per key, place and value), not on every read, so a migration that
+        # drops values is seen in the log instead of the app quietly running on its defaults (issue #52).
+        seen = (key, where, repr(raw))
+        if seen not in self._ignored:
+            self._ignored.add(seen)
+            log.warning("setting %s: ignoring %r from %s (%s); using the next source", key, raw, where, e)
 
     def get(self, key: str) -> str:
         """The value as a string (a list setting joined by its separator)."""
@@ -408,9 +456,10 @@ class Settings:
             return Literal[allowed], ...  # pyright: ignore[reportInvalidTypeForm] - a Literal built at run time  # ty: ignore[invalid-type-form]
         n = s.normalise
         if self.numbers and isinstance(n, whole_between):
-            return int, field(..., ge=n.lo, le=n.hi)
+            return int, field(..., ge=n.lo, le=n.hi)  # le=None leaves the maximum out of the schema
         if self.numbers and isinstance(n, number_between):
-            return float, field(..., ge=n.lo, le=n.hi)
+            low = {"gt": n.lo} if n.lo_open else {"ge": n.lo}
+            return float, field(..., le=n.hi, **low)
         return str, ...
 
     def folder(self, key: str) -> str:
