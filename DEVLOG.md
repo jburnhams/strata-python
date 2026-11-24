@@ -15,6 +15,14 @@ strata-voice's step 2 scores each take of a prompt (clipping, level, noise floor
 - `tests/unit/test_wav.py`, `tests/unit/test_wer.py` (**new**): levels of a known tone, clipping, 24-bit, silence, refusals; each kind of edit.
 - `README.md`, `AGENTS.md`, `CHANGELOG.md`: the new names.
 
+**`media.configure`: the app's own setting says where ffmpeg and ffprobe are (#60, branch `claude/project-thread-wov55p`)**
+
+Tubes declares `ffmpeg` on its `Settings` and its doctor checks that path, but `media` only read `STRATA_FFMPEG` and the PATH, so Tubes kept its own `subprocess` call and the setting and the variable could name two programs. The issue offered an `exe=` keyword or a resolver set once; the resolver was chosen, because every call site (including `derive`, which calls `media` itself) would otherwise have to pass it.
+
+- `src/strata_python/media.py`: `configure()` and `_from_app()`; `tool()` asks the app first, then the environment, then the PATH. The function is read on every lookup so `app set ffmpeg` takes effect while the server runs. A configured value that is not runnable raises instead of falling back, so the doctor row and the run never disagree about which program is used.
+- `tests/unit/test_media.py`: the order of the lookup and a changing setting, and a real probe and ffmpeg run found only through `configure` with the environment variables pointing elsewhere.
+- `README.md`: the module row and the migration note.
+
 **The publish workflow installs ffmpeg (branch `claude/project-thread-42bdk4`)**
 
 v0.2.11 was tagged and released on GitHub but not uploaded: `pypi-publish.yml` runs `strata-check` on the tag, and with no ffmpeg on its runner the `media` and `derive` tests skip, which put unit coverage under the 95% floor. `ci.yml` installs ffmpeg and sets `STRATA_TEST_FFMPEG=1`; the publish job now does the same. v0.2.11 then needs publishing by hand (the workflow's `tag` input), since the tag's own run has failed.

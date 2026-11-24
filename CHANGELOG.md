@@ -10,6 +10,12 @@ What each release adds or changes for an app that depends on strata-python, newe
 - `strata_python.wer`: `word_errors(said, heard)` gives a transcript's word error rate against the text meant, with the words missed and the alignment; `normalise(text)` is how both are read. Use it to check a recording against its prompt.
 - `testing.sine_wav(..., lead=, tail=, noise=)`: quiet before and after the tone and a seeded noise under it; an amplitude above 1 is cut at full scale (a clipped take).
 
+## 0.2.13 (2026-11-24)
+
+### Added
+
+- `media.configure(ffmpeg=..., ffprobe=...)`: an app with its own setting for the tools says where they are, as a path or a function read on every run (`media.configure(ffmpeg=lambda: settings.get("ffmpeg"))`), so `probe`, `duration`, `ffmpeg`, `derive` and `available()` run the program the setting names; when it gives nothing the environment and the PATH apply as before, and a setting that names no runnable program is a `MediaError` that says so (#60). Replace an app's own `subprocess` call kept for its ffmpeg setting with `media.ffmpeg`.
+
 ## 0.2.12 (2026-11-24)
 
 ## 0.2.11 (2026-11-24)

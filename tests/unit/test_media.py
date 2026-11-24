@@ -142,6 +142,48 @@ def test_tool_lookup_and_env_override(monkeypatch, tmp_path):
     assert media.available() == {"ffmpeg": False, "ffprobe": True}
 
 
+@pytest.fixture
+def forget_configure():
+    yield
+    media.configure(ffmpeg=None, ffprobe=None)
+
+
+def test_configured_setting_wins_and_is_read_each_time(monkeypatch, tmp_path, forget_configure):
+    """An app's own setting decides the program, is read on every lookup, and leaves the other tool alone."""
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("STRATA_FFMPEG", "/from/the/environment")
+    monkeypatch.delenv("STRATA_FFPROBE", raising=False)
+    setting: dict[str, str | None] = {"ffmpeg": sys.executable}
+    media.configure(ffmpeg=lambda: setting["ffmpeg"])
+    assert media.tool("ffmpeg") == shutil.which(sys.executable)
+    assert media.available() == {"ffmpeg": True, "ffprobe": False}
+    setting["ffmpeg"] = None  # not set in the app: the environment applies again
+    assert media.tool("ffmpeg") == "/from/the/environment"
+    setting["ffmpeg"] = str(tmp_path / "no-such-ffmpeg")  # set, but wrong: say so, do not quietly run another one
+    with pytest.raises(media.MediaError, match=r"ffmpeg is set to .*no-such-ffmpeg.*change the setting"):
+        media.tool("ffmpeg")
+    assert media.available()["ffmpeg"] is False
+    media.configure(ffprobe=tmp_path / "missing")  # a plain path; ffmpeg's function is kept
+    assert media.available() == {"ffmpeg": False, "ffprobe": False}
+    media.configure(ffmpeg=None, ffprobe=sys.executable)
+    assert media.tool("ffmpeg") == "/from/the/environment"
+    assert media.tool("ffprobe") == shutil.which(sys.executable)
+
+
+@needs_ffmpeg
+def test_probe_and_ffmpeg_run_the_configured_programs(clip, tmp_path, monkeypatch, forget_configure):
+    """The real tools found only through the app's setting, with an environment variable that points elsewhere."""
+    ffmpeg_exe, ffprobe_exe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("STRATA_FFMPEG", str(tmp_path / "wrong"))
+    monkeypatch.setenv("STRATA_FFPROBE", str(tmp_path / "wrong"))
+    media.configure(ffmpeg=lambda: ffmpeg_exe, ffprobe=lambda: ffprobe_exe)
+    assert media.duration(clip) == pytest.approx(2.0, abs=0.1)
+    out = tmp_path / "tone.wav"
+    media.ffmpeg(["-i", clip, "-vn", out])
+    assert media.probe(out).audio is not None
+
+
 def test_probe_answers_ffprobe_gives(monkeypatch):
     """The edges real files rarely show: no container duration, a "0/0" rate, junk output, a tool that will not start."""
     monkeypatch.setenv("STRATA_FFPROBE", "ffprobe")
