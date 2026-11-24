@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.17 (2026-11-24)
+
 ### Added
 
 - `strata_python.speech`: a library of spoken clips (issue #73). `ClipStore(root)` keeps each line's WAV, named by its content, with its source (`generated` or `recorded`), voice, model and settings hash; `build(store, lines, app=, voice=, params=, per_line=, now=, force=)` makes the missing clips with strata-models' `speak` role and remakes one whose voice, model or settings changed, never a person's recording, reporting each line that fails (`Built`); `add_clip_routes(app, store, prefix, recordable=)` serves the clip list (`ClipsOut`), the clips with an immutable cache header, and a person's recordings (`PUT`/`DELETE {prefix}/recordings?line=`, `ClipOut`). Replace an app's own clip store, build loop and voice routes with these.
