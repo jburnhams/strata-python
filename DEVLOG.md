@@ -15,7 +15,29 @@ strata-voice's step 2 scores each take of a prompt (clipping, level, noise floor
 - `tests/unit/test_wav.py`, `tests/unit/test_wer.py` (**new**): levels of a known tone, clipping, 24-bit, silence, refusals; each kind of edit.
 - `README.md`, `AGENTS.md`, `CHANGELOG.md`: the new names.
 
+**The publish workflow installs ffmpeg (branch `claude/project-thread-42bdk4`)**
+
+v0.2.11 was tagged and released on GitHub but not uploaded: `pypi-publish.yml` runs `strata-check` on the tag, and with no ffmpeg on its runner the `media` and `derive` tests skip, which put unit coverage under the 95% floor. `ci.yml` installs ffmpeg and sets `STRATA_TEST_FFMPEG=1`; the publish job now does the same. v0.2.11 then needs publishing by hand (the workflow's `tag` input), since the tag's own run has failed.
+
+- `.github/workflows/pypi-publish.yml`: an ffmpeg step and `STRATA_TEST_FFMPEG=1`.
+
 ## 2026-11-23
+
+**Main's CI red on a Ticker test; `derive` listed under the wrong release (branch `claude/project-thread-42bdk4`)**
+
+After #56 merged, CI on main failed on Windows in `test_ticker_fn_chooses_the_next_wait_and_poke_wakes_it` (from #58), so no release ran and `derive` is not on PyPI. The test waited for `next_at` to be set after the second run, which it also is for the 1 ms wait between the second and third runs; Windows' coarse clock made that moment long enough to be read. It now waits for the long wait itself.
+
+- `tests/unit/test_tasks.py`: the wait condition. No library code changes.
+- `CHANGELOG.md`: a correction. 0.2.10 was released from #58 while #56 was open, and merging main into #56 put its two lines under the 0.2.10 heading; `derive` and `media.ffmpeg(sink=)` are not in 0.2.10, so they move back to Unreleased, for the next release.
+
+**`derive`: proxies, thumbnails and audio peaks beside `media.probe` (branch `claude/project-thread-42bdk4`)**
+
+strata-reels' first step (ingest) needs a browser proxy, thumbnails and audio peaks for every tape, and its plan puts them here because every app that shows footage needs the same three. The owner set that ingest starts from the raw footage: restoration is a strata-models job later in reels' pipeline, so the proxy only deinterlaces for display and changes nothing else.
+
+- `src/strata_python/derive.py` (**new**): `interlacing`, `proxy`, `thumbnails`, `Thumb`, `peaks`, `Peaks`, `RECIPE`. The proxy keeps the source's frames at their times (`-fps_mode passthrough`, bwdif `send_frame`), so a time chosen on it is the time in the source; the digitised VHS tapes are interlaced but do not say so (strata-models' VHS work had to force top field first), so a stream's "progressive" is checked with `idet` rather than believed, and an even split between the two field orders (fine detail in progressive footage) counts as progressive. Thumbnails use a `select` on each frame's time rather than the `fps` filter, which drops the picture for the last stretch (a 12 s clip at 10 s steps gave one thumbnail, not two). Each thumbnail run stages in its own temporary folder (Codex on #56: two runs into one folder shared a fixed `.part` name and deleted each other's). Peaks are min/max pairs because that is what strata-react's `Waveform` draws.
+- `src/strata_python/media.py`: `ffmpeg(sink=...)`, and the progress reader and the new stdout reader share one `_piped` runner (stderr drained on a thread, timeout kill, a reader that raises stops ffmpeg).
+- `tests/unit/test_derive.py` (**new**): on generated PAL-shaped interlaced clips (with and without a field order), progressive clips and a square tone; `tests/unit/test_media.py`: the sink.
+- README (module row), AGENTS.md (layout), CHANGELOG.
 
 **Issues #52 to #55, from tubes moving onto 0.2.7 (branch `claude/project-thread-w34kcw`)**
 
