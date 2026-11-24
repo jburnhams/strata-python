@@ -18,8 +18,12 @@ message ends with the last lines ffmpeg wrote, because that is the only place th
 
 Durations: the container's, else the longest stream's (some MP3s and raw streams have no container duration). A wrong
 VBR header still gives a wrong number; `info.warnings` carries ffprobe's "estimating duration from bitrate" so an app
-that cares (listory) can decode and count instead. The tools are found on the PATH, or `STRATA_FFMPEG`/`STRATA_FFPROBE`
-when set (a build with more codecs). Standard library only; `run` is injectable, but tests should prefer the real
+that cares (listory) can decode and count instead.
+
+The tools are found from the app's own setting when it has one (`configure(ffmpeg=lambda: settings.get("ffmpeg"))`,
+once at start), else `STRATA_FFMPEG`/`STRATA_FFPROBE` (a build with more codecs), else the PATH. The setting is read on
+every run, so `app set ffmpeg /path` takes effect without a restart, and `available()` asks the same way, so a doctor
+row agrees with what runs. Standard library only; `run` is injectable, but tests should prefer the real
 tools on a tiny generated file."""
 
 from __future__ import annotations
@@ -38,14 +42,54 @@ from strata_python import oslib
 
 Json = dict[str, Any]
 ENV = {"ffmpeg": "STRATA_FFMPEG", "ffprobe": "STRATA_FFPROBE"}
+Path = str | os.PathLike[str]
+Where = Path | Callable[[], Path | None] | None
+_UNCHANGED: Any = object()
+# What the app said, per tool: a path, or a function read on every lookup (a setting the owner can change while the
+# server runs). A function that answers None or "" means "not set here", so the environment and the PATH still apply.
+_configured: dict[str, Callable[[], Path | None]] = {}
 
 
 class MediaError(RuntimeError):
     """ffmpeg or ffprobe is missing, could not read the file, ran out of time or failed."""
 
 
+def configure(*, ffmpeg: Where = _UNCHANGED, ffprobe: Where = _UNCHANGED) -> None:
+    """Say where the app's own setting puts the tools, once at start: a path, or a function read on every run
+    (`configure(ffmpeg=lambda: settings.get("ffmpeg"))`). A tool not named keeps what it had; `None` forgets it. An
+    app with its own setting for the program uses this so the setting, not a second environment variable, decides
+    what runs. Tests that call it undo it with `configure(ffmpeg=None, ffprobe=None)`."""
+    for name, where in (("ffmpeg", ffmpeg), ("ffprobe", ffprobe)):
+        if where is _UNCHANGED:
+            continue
+        if where is None:
+            _configured.pop(name, None)
+        elif isinstance(where, (str, os.PathLike)):
+            _configured[name] = _fixed(cast("Path", where))
+        else:
+            _configured[name] = where
+
+
+def _fixed(path: Path) -> Callable[[], Path]:
+    return lambda: path
+
+
+def _from_app(name: str) -> str | None:
+    where = _configured.get(name)
+    value = where() if where else None
+    return os.fspath(value) if value else None
+
+
 def tool(name: str) -> str:
-    """The path of `ffmpeg` or `ffprobe`: `STRATA_FFMPEG` / `STRATA_FFPROBE` when set, else the PATH."""
+    """The path of `ffmpeg` or `ffprobe`: the app's `configure`d setting when it gives one, else `STRATA_FFMPEG` /
+    `STRATA_FFPROBE` when set, else the PATH. A setting that names no runnable program is a MediaError that names it,
+    rather than a quiet fall back to another ffmpeg than the one the owner chose."""
+    chosen = _from_app(name)
+    if chosen:
+        found = shutil.which(chosen)  # a bare name is looked up on the PATH; a path must be an executable file
+        if not found:
+            raise MediaError(f"{name} is set to {chosen}, which is not a program that can be run: change the setting")
+        return found
     found = os.environ.get(ENV.get(name, "")) or shutil.which(name)
     if not found:
         raise MediaError(f"{name} is not installed (or not on the PATH): install ffmpeg, or set {ENV.get(name, name)}")
@@ -53,7 +97,7 @@ def tool(name: str) -> str:
 
 
 def available() -> dict[str, bool]:
-    """Which of the tools can be found, for a doctor row."""
+    """Which of the tools can be found, for a doctor row; the same lookup `probe` and `ffmpeg` use."""
     out: dict[str, bool] = {}
     for name in ENV:
         try:
