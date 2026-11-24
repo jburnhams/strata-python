@@ -4,6 +4,7 @@ whether the picture is interlaced. Beside `media.probe`, on the same ffmpeg (`me
     interlacing(path)                          # "tff", "bff" or "progressive": the stream's field order, else idet
     proxy(src, "proxy.mp4", height=540)        # H.264 + AAC MP4, square pixels, a keyframe every half second
     thumbnails(src, "thumbs/", every=10)       # [Thumb(time=Fraction(0), path=".../000000.jpg"), ...]
+    frames(src, "keys/", [12, 840, 4001])      # [Frame(number=12, path=".../000012.jpg"), ...]: chosen frames
     peaks(src, per_second=50).to_json()        # {"per_second": 50, "min": [...], "max": [...]}, -1 to 1
 
 Choices that matter to an app:
@@ -21,6 +22,12 @@ Choices that matter to an app:
 - **Thumbnails** are JPEGs, one per `every` seconds from the start: the first frame at or after each multiple of
   `every` (a `select` on the frame's time, so the last stretch of a file gets its picture, which ffmpeg's `fps` filter
   drops), named by their index; `Thumb.time` is `index * every`, exact, and the picture is at most a frame after it.
+- **Frames** are JPEGs of chosen frames, by number (the n-th frame decoded, from 0: the count a shot detector gives,
+  and `mediatime.Rate.frame_at` of a time from the file's start on constant-rate footage), named by that number. An
+  editor wants one picture per shot (to show it, describe it, compare it with the next); a shot can be shorter than
+  the thumbnails' step, so these are picked by number instead. Each run decodes from the start and stops after its
+  last frame; the numbers go in runs of `FRAMES_PER_RUN`, so the command line stays short on Windows (a few hundred
+  shots on a tape is a run or two).
 - **Peaks** are the lowest and highest sample of each slice of the first audio stream mixed to mono, from -1 to 1:
   the pair strata-react's `Waveform` takes. The audio is read as it is decoded (`media.ffmpeg(sink=...)`), never held
   whole, so a two-hour tape costs the same memory as a minute.
@@ -38,7 +45,7 @@ import re
 import shutil
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Any, Literal
@@ -48,7 +55,7 @@ from strata_python import files, media, mediatime
 Interlace = Literal["tff", "bff", "progressive"]
 
 #: The version of each recipe: raise one when its output changes for the same arguments.
-RECIPE: dict[str, int] = {"proxy": 1, "thumbnails": 1, "peaks": 1}
+RECIPE: dict[str, int] = {"proxy": 1, "thumbnails": 1, "peaks": 1, "frames": 1}
 
 # Only an interlaced field order is taken at its word: "progressive" is what many encoders write for whatever they
 # were given, interlaced tape included, so it is checked like a stream that says nothing.
@@ -198,6 +205,72 @@ def thumbnails(
         raise
     names = sorted(n for n in os.listdir(target) if n.endswith(".jpg"))
     return [Thumb(time=int(n[:-4]) * step, path=os.path.join(target, n)) for n in names]
+
+
+@dataclass(frozen=True)
+class Frame:
+    number: int  # the n-th frame decoded, from 0
+    path: str
+
+
+#: How many frames one ffmpeg run picks: each costs about 16 characters of filter, and Windows caps a command line at
+#: 32,767.
+FRAMES_PER_RUN = 400
+
+
+def frames(
+    src: str | os.PathLike[str],
+    folder: str | os.PathLike[str],
+    numbers: Sequence[int],
+    *,
+    height: int = 360,
+    quality: int = 3,
+    interlace: Interlace | None = None,
+    info: media.Probe | None = None,
+    progress: Callable[[float], None] | None = None,
+    timeout: float | None = None,
+) -> list[Frame]:
+    """Write a JPEG of each frame in `numbers` (counted from 0, repeats ignored) into `folder` (replaced if it is
+    there) and return them in order. ValueError for a negative number; MediaError when a number is past the last
+    frame. `progress(seconds)` as the file is read."""
+    wanted = sorted(set(numbers))
+    if wanted and wanted[0] < 0:
+        raise ValueError(f"frames are counted from 0, not {wanted[0]}")
+    info = info or media.probe(src)
+    fields = interlace or interlacing(src, info=info)
+    named: str = os.fspath(folder)
+    target = os.path.abspath(named)
+    parent, name = os.path.split(target)
+    os.makedirs(parent, exist_ok=True)
+    part = tempfile.mkdtemp(prefix=f".{name}.", suffix=".part", dir=parent)
+    try:
+        for i in range(0, len(wanted), FRAMES_PER_RUN):
+            run = wanted[i : i + FRAMES_PER_RUN]
+            pick = "select='" + "+".join(f"eq(n\\,{n})" for n in run) + "'"
+            # deinterlaced before the pick, as the deinterlacer reads the frames either side
+            vf = ",".join([*_deinterlace(fields), pick, _scale(height)])
+            staged = os.path.join(part, f"run{i // FRAMES_PER_RUN}")
+            os.mkdir(staged)
+            media.ffmpeg(
+                [
+                    "-i", src, "-map", "0:v:0", "-vf", vf, "-fps_mode", "passthrough", "-frames:v", str(len(run)),
+                    "-q:v", str(quality), "-start_number", "0", os.path.join(staged, "%06d.jpg"),
+                ],
+                progress=progress,
+                timeout=timeout,
+            )  # fmt: skip
+            made = sorted(os.listdir(staged))
+            if len(made) < len(run):
+                raise media.MediaError(f"{os.fspath(src)} has no frame {run[len(made)]}: it ends before it")
+            for k, n in enumerate(run):
+                os.replace(os.path.join(staged, made[k]), os.path.join(part, f"{n:06d}.jpg"))
+            os.rmdir(staged)
+        shutil.rmtree(target, ignore_errors=True)
+        os.replace(part, target)
+    except BaseException:
+        shutil.rmtree(part, ignore_errors=True)
+        raise
+    return [Frame(number=n, path=os.path.join(target, f"{n:06d}.jpg")) for n in wanted]
 
 
 @dataclass

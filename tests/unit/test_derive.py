@@ -193,7 +193,7 @@ def test_reduce_takes_a_short_last_slice():
 
 
 def test_every_recipe_has_a_version():
-    assert set(derive.RECIPE) == {"proxy", "thumbnails", "peaks"}
+    assert set(derive.RECIPE) == {"proxy", "thumbnails", "peaks", "frames"}
 
 
 @needs_ffmpeg
@@ -225,3 +225,47 @@ def test_two_thumbnail_runs_into_one_folder_do_not_share_a_staging_folder(clips,
     assert sorted(os.listdir(folder)) == ["000000.jpg", "000001.jpg", "000002.jpg"]
     assert sorted(os.listdir(tmp_path)) == ["thumbs"]
     assert all(isinstance(e, OSError) for e in errors)  # a loser of the final rename, never a mixed folder
+
+
+def _brightness(path) -> float:
+    # the picture shrunk to one grey pixel by averaging (not a lavfi `movie=` source: a Windows path's colon breaks it)
+    out = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(path), "-vf", "scale=1:1:flags=area,format=gray", "-f", "rawvideo", "-"],
+        capture_output=True, check=True,
+    )  # fmt: skip
+    return float(out.stdout[0])
+
+
+@needs_ffmpeg
+def test_frames_are_the_numbered_frames_whatever_the_order(tmp_path):
+    # each frame's brightness is 40 * its number, so a picture says which frame it is
+    clip = _make(
+        tmp_path / "ramp.mkv", "-f", "lavfi", "-i", "color=c=black:size=64x48:rate=25:duration=0.24",
+        "-vf", "geq=lum='16+40*N':cb=128:cr=128", "-c:v", "ffv1",
+    )  # fmt: skip
+    got = derive.frames(clip, tmp_path / "keys", [4, 0, 2, 2], height=48)
+    assert [f.number for f in got] == [0, 2, 4]
+    assert [os.path.basename(f.path) for f in got] == ["000000.jpg", "000002.jpg", "000004.jpg"]
+    assert [round((_brightness(f.path) - 16) / 40) for f in got] == [0, 2, 4]
+    assert sorted(os.listdir(tmp_path)) == ["keys", "ramp.mkv"]
+
+
+@needs_ffmpeg
+def test_frames_in_several_runs_and_past_the_end(clips, tmp_path, monkeypatch):
+    monkeypatch.setattr(derive, "FRAMES_PER_RUN", 2)  # three runs for five frames
+    got = derive.frames(clips["silent"], tmp_path / "keys", [70, 1, 30, 74, 12], height=90)
+    assert [f.number for f in got] == [1, 12, 30, 70, 74]
+    assert sorted(os.listdir(tmp_path / "keys")) == [f"{n:06d}.jpg" for n in (1, 12, 30, 70, 74)]
+    probe = media.probe(got[0].path)
+    assert probe.video is not None
+    assert (probe.video.width, probe.video.height) == (120, 90)  # 16:15 pixels shown square
+    with pytest.raises(media.MediaError, match="no frame 75"):
+        derive.frames(clips["silent"], tmp_path / "keys", [3, 75], interlace="tff")
+    assert len(os.listdir(tmp_path / "keys")) == 5  # the old folder is kept
+    assert sorted(os.listdir(tmp_path)) == ["keys"]
+    assert derive.frames(clips["silent"], tmp_path / "none", []) == []
+
+
+def test_frames_are_counted_from_zero(tmp_path):
+    with pytest.raises(ValueError, match="counted from 0"):
+        derive.frames(tmp_path / "x.mkv", tmp_path / "k", [-1, 3])
