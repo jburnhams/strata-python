@@ -2,6 +2,18 @@
 
 Why each change was made and which files it touched, newest day first. For what changed in each release, as an app sees it, read [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-24
+
+**`wav.measure` and `wer` for scoring recorded takes (branch `claude/project-thread-cvjjmf`)**
+
+strata-voice's step 2 scores each take of a prompt (clipping, level, noise floor, and the word error rate of its transcript against the prompt). The owner wants shared audio code in the libraries, and strata-models' transcription evals compute the same word error rate, so both live here.
+
+- `src/strata_python/wav.py`: `measure` and `WavLevels`. Standard library only: `array` holds the samples and `map(operator.mul, w, w)` squares a window in C, about 0.2 s for a minute at 48 kHz, so no numpy for an app that only judges takes. 24-bit is widened by slicing the bytes into the top three of four (scaled by 256, sign kept). Noise is the 10th percentile and speech the 95th of 20 ms window RMS, so pauses are the floor and one cough is not the voice. A sample within 0.1 % of full scale counts as clipped; the count is skipped when the peak is below that, the usual case.
+- `src/strata_python/wer.py` (**new**): `normalise` (the same rules as strata-models' eval metrics, so the numbers compare) and `word_errors`, a Levenshtein alignment that keeps its edits, so an app can name the words missed rather than give a bare rate.
+- `src/strata_python/testing.py`: `sine_wav` takes `lead`, `tail` and a seeded `noise`, and clamps above full scale, so tests can make a take with pauses, a room and clipping.
+- `tests/unit/test_wav.py`, `tests/unit/test_wer.py` (**new**): levels of a known tone, clipping, 24-bit, silence, refusals; each kind of edit.
+- `README.md`, `AGENTS.md`, `CHANGELOG.md`: the new names.
+
 ## 2026-11-23
 
 **Issues #52 to #55, from tubes moving onto 0.2.7 (branch `claude/project-thread-w34kcw`)**

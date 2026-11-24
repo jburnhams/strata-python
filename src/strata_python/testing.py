@@ -28,6 +28,7 @@ import io
 import json
 import math
 import os
+import random
 import struct
 import subprocess
 import sys
@@ -482,12 +483,20 @@ def sine_wav(
     channels: int = 1,
     hz: float = 220.0,
     amplitude: float = 0.3,
+    lead: float = 0.0,
+    tail: float = 0.0,
+    noise: float = 0.0,
 ) -> bytes:
-    """A PCM WAV of a tone at `amplitude` (0 to 1; 0 is silence): real bytes an app's upload tests send."""
+    """A PCM WAV of a tone at `amplitude` (0 to 1; 0 is silence, above 1 is cut at full scale, as an overdriven
+    input clips): real bytes an app's upload tests send. `lead` and `tail` are seconds of quiet before and after the
+    tone, and `noise` the peak of a white noise under all of it (a room), the same noise on every call."""
     full = (1 << (8 * width - 1)) - 1
+    rng = random.Random(0)  # noqa: S311 - a test signal, not a secret
     frames = bytearray()
-    for i in range(round(seconds * rate)):
-        v = round(full * amplitude * math.sin(2 * math.pi * hz * i / rate))
+    start, end = round(lead * rate), round((lead + seconds) * rate)
+    for i in range(end + round(tail * rate)):
+        tone = amplitude * math.sin(2 * math.pi * hz * (i - start) / rate) if start <= i < end else 0.0
+        v = round(full * max(-1.0, min(1.0, tone + (noise * rng.uniform(-1, 1) if noise else 0.0))))
         sample = struct.pack("<i", v)[:width] if width > 1 else struct.pack("<B", v + 128)
         frames += sample * channels
     out = io.BytesIO()

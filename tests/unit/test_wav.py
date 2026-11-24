@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from strata_python.testing import sine_wav
-from strata_python.wav import SPEECH_RATE, WavError, WavInfo, read_wav
+from strata_python.wav import SILENCE_DB, SPEECH_RATE, WavError, WavInfo, WavLevels, measure, read_wav
 
 
 def test_reads_a_mono_16_bit_wav() -> None:
@@ -90,3 +90,38 @@ def test_an_empty_file_and_a_wav_with_no_frames(tmp_path: Path) -> None:
     with pytest.raises(WavError, match="empty"):
         read_wav(path)
     assert read_wav(sine_wav(0.0)).frames == 0
+
+
+def test_measures_the_levels_of_a_take() -> None:
+
+    levels = measure(sine_wav(1.0, amplitude=0.5, lead=0.5, tail=0.5, noise=0.001, rate=48_000))
+    assert levels.seconds == 2.0
+    assert levels.peak_db == pytest.approx(-6.0, abs=0.1)
+    assert levels.clipped == 0
+    assert levels.speech_db == pytest.approx(-9.0, abs=0.2)  # a sine's RMS is 3 dB under its peak
+    assert -70 < levels.noise_db < -60  # uniform noise of peak 0.001 (-60 dBFS) has an RMS 4.8 dB lower
+    assert levels.snr_db == pytest.approx(levels.speech_db - levels.noise_db)
+
+
+def test_counts_clipped_samples_and_reads_24_bit(tmp_path: Path) -> None:
+
+    path = tmp_path / "loud.wav"
+    path.write_bytes(sine_wav(0.5, amplitude=1.5, width=3))
+    levels = measure(path)
+    assert levels.peak_db == pytest.approx(0.0, abs=0.01)
+    assert levels.clipped > 1000  # a third of every cycle sits at full scale
+    assert measure(sine_wav(0.5, amplitude=0.5, width=3)).peak_db == pytest.approx(-6.0, abs=0.1)
+
+
+def test_silence_and_an_empty_take_read_the_floor() -> None:
+
+    assert measure(sine_wav(0.5, amplitude=0)).noise_db == SILENCE_DB
+    assert measure(sine_wav(0.0)) == WavLevels(SILENCE_DB, 0, SILENCE_DB, SILENCE_DB, 0.0)
+
+
+def test_measure_refuses_what_it_cannot_decode() -> None:
+
+    with pytest.raises(WavError, match="16-bit or 24-bit"):
+        measure(sine_wav(0.1, width=1))
+    with pytest.raises(WavError, match="not a WAV"):
+        measure(b"RIFFnope")
