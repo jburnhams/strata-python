@@ -23,7 +23,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Annotated, Any
 
-from fastapi import APIRouter, Body, FastAPI, Query, Request
+from fastapi import APIRouter, FastAPI, Query, Request
+from pydantic import BaseModel
 
 from strata_python.contracts import Page, StageEvent, StageRun, Task, WorkflowRun, utc
 from strata_python.workflow.pipeline import Pipeline, Record, Store
@@ -32,6 +33,13 @@ if TYPE_CHECKING:
     from strata_python.tasks.queue import Queue
 
 Inputs = Callable[[str], Mapping[str, Any]]
+
+
+class Approval(BaseModel):
+    """The body of an approval: `value` is kept with it (the choice made, the policy judged by). A request body, so a
+    plain BaseModel (`contracts.ApiModel` would give the schema an -Input and an -Output twin)."""
+
+    value: Any = None
 
 
 def event(r: Record, *, data: bool = False) -> StageEvent:
@@ -144,8 +152,9 @@ def add_workflow(
 
     @r.post("/subjects/{subject}/stages/{stage}/approve")
     def approve_stage(  # pyright: ignore[reportUnusedFunction]
-        subject: str, stage: str, request: Request, value: Annotated[Any, Body(embed=True)] = None
+        subject: str, stage: str, request: Request, body: Approval | None = None
     ) -> WorkflowRun:
+        value = None if body is None else body.value
         pipeline.approve(store(), subject, stage, inputs(subject), by=who(request), value=value)
         return start(subject)
 
