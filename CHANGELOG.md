@@ -6,6 +6,9 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ### Added
 
+- `derive.frames(src, folder, numbers, *, height=360, ...)` returns `Frame(number, path)` JPEGs of chosen frames, by number from 0 (the count `shot-boundaries` gives), deinterlaced like the thumbnails, written into place atomically: one picture per shot, however short the shot. `RECIPE["frames"]` is its version.
+- `clients.models.shot_boundaries(path, app, ...)` runs role `shot-boundaries`; `Shots.from_json` reads its answer (`cuts` as `Cut(time, frame, score)`, `shots` and `black` as `Stretch(start, end)`, `fps`, `frames`, `threshold`, `min_shot_s`, `scores`). `ROLES` and `testing.MODELS_RESULTS` include it, so `fake_models` answers it.
+
 - `wav.measure(data_or_path)` returns `WavLevels` (`peak_db`, `clipped`, `noise_db`, `speech_db`, `snr_db`, `seconds`) of a 16- or 24-bit PCM WAV: the levels a studio judges a take of speech by. Replace an app's own sample loop.
 - `strata_python.wer`: `word_errors(said, heard)` gives a transcript's word error rate against the text meant, with the words missed and the alignment; `normalise(text)` is how both are read. Use it to check a recording against its prompt.
 - `testing.sine_wav(..., lead=, tail=, noise=)`: quiet before and after the tone and a seeded noise under it; an amplitude above 1 is cut at full scale (a clipped take).

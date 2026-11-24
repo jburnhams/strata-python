@@ -4,6 +4,15 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-24
 
+**Frames by number and a typed shot-boundaries client, for strata-reels' scenes (branch `claude/project-thread-36vaj1`)**
+
+strata-reels' plan step 2 splits a tape into shots (strata-models' `shot-boundaries`) and groups them into scenes by how alike neighbouring shots look (CLIP, `image-embed`), which needs one picture per shot. A VHS shot is often shorter than the thumbnails' 10 s step, so the pictures are picked by frame number, and both pieces are general: any app that cuts footage into shots wants them.
+
+- `src/strata_python/derive.py`: `frames` and `Frame`; `RECIPE["frames"]`. A `select` of `eq(n,k)` terms after the deinterlacer (bwdif reads the frames either side, so it runs before the pick), `-frames:v` so ffmpeg stops after the last one. Runs of `FRAMES_PER_RUN` (400) numbers, each decoding from the start: the filter is about 16 characters a frame and Windows caps a command line at 32,767, and a tape's few hundred shots are one or two runs. Seeking each run to its first frame was not used, as a frame count after an input seek is not the frame number. A number past the end is a `MediaError` naming it, and the old folder is kept.
+- `src/strata_python/clients/models.py`: `shot_boundaries`, `Shots`, `Cut`, `Stretch`; `ROLES` names `shot-boundaries` (strata-models serves it since its #102).
+- `src/strata_python/testing.py`: `MODELS_RESULTS["shot-boundaries"]`, in the runtime's shape.
+- `tests/unit/test_derive.py`: frames of a ramp whose brightness is 40 times the frame number, so each picture is checked to be its frame; several runs; past the end; negative numbers. `tests/unit/test_clients_models.py`: the shortcut's request and the typed answer.
+
 **`wav.measure` and `wer` for scoring recorded takes (branch `claude/project-thread-cvjjmf`)**
 
 strata-voice's step 2 scores each take of a prompt (clipping, level, noise floor, and the word error rate of its transcript against the prompt). The owner wants shared audio code in the libraries, and strata-models' transcription evals compute the same word error rate, so both live here.

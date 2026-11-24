@@ -215,3 +215,20 @@ def test_a_result_with_what_made_it_and_the_settings_a_cache_keys_on(service):
 def test_provenance_from_a_row_of_an_older_service():
     p = sm.Provenance.from_job({"id": 7, "model": "buffalo_l", "status": "done"})
     assert p == sm.Provenance("buffalo_l", None, None, 7)
+
+
+def test_shot_boundaries_sends_an_absolute_path_and_reads_typed(service):
+    sm.shot_boundaries("tape.mkv", app="strata-reels", priority="low", clip=(0, 60), scores=True)
+    job = service.jobs[0]
+    assert (job["role"], job["priority"], job["params"]["clip"], job["params"]["scores"]) == (
+        "shot-boundaries", "low", [0, 60], True,
+    )  # fmt: skip
+    assert job["params"]["path"].endswith("tape.mkv")
+    assert job["params"]["path"] != "tape.mkv"
+    s = sm.Shots.from_json(RESULTS["shot-boundaries"])
+    assert (s.cuts[0], s.shots[-1], s.black, s.fps, s.frames) == (
+        sm.Cut(4.0, 100, 0.82), sm.Stretch(9.36, 12.0), [sm.Stretch(3.6, 4.0)], 25.0, 300,
+    )  # fmt: skip
+    assert (s.threshold, s.min_shot_s, s.scores, s.model, s.raw["width"]) == (0.3, 0.6, [], "ffmpeg-scene-score", 160)
+    bare = sm.Shots.from_json({"cuts": [], "shots": [], "scores": [0.1, 0.9]})
+    assert (bare.black, bare.fps, bare.scores) == ([], None, [0.1, 0.9])
