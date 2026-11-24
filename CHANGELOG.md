@@ -4,6 +4,10 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `strata_python.workflow`: work in named, versioned stages over one subject. `Pipeline(name, [step(...), gate(...)])` caches each stage by a key of its `version`, the inputs it reads (`keys`) and its `needs`' answers, so a re-run does only what a changed input, version or answer affects; `advance(store, subject, inputs, app)` resumes where it stopped, records a failed stage and runs the rest before raising (a queue retry starts at the failure), and stops at a `gate` until `approve(..., by=)` or the gate's `auto` policy approves it for the answers it saw; `clear` forgets a stage and its dependents; `status` gives each stage's state (done, ready, stale, failed, waiting, blocked) and the whole's. Records go to any `Store` (`load`, `save`): `MemoryStore` or the app's own; `Pipeline(key=fn)` keeps an app's own keys (`default_key` otherwise) and `Pipeline(json=False)` lets stages hand each other values JSON cannot hold in a run kept in memory.  `request_key` (canonical sha256 for any cache key), and `StateMachine` (declared transitions; `InvalidTransition` is a `ValueError`, so a 400). With the `[db]` extra, `workflow.store`: `workflow_table(metadata)` (append-only records; add a revision), `DbStore`, `enqueue(queue, pipeline, subject)` (one job per subject, holding the stages' resources) and `move(conn, machine, table, where, to)` (a state change as one conditional UPDATE). Shared routes, so strata-react can draw any app's jobs and pipelines: `tasks.web.add_jobs(app, queue)` (`GET /api/jobs`, `/api/jobs/counts`, `/api/jobs/{id}`, `POST .../cancel`, `.../retry`) and `workflow.web.add_workflow(app, pipeline, store=, inputs=, queue=)` (`/api/workflows/<pipeline>/subjects`, one subject, a stage's history, run, approve, clear), with the contracts `WorkflowRun`, `StageRun`, `StageEvent`, `StageState` and `WorkflowState`. Replace an app's stage loop, cache-key function, approval signature, `UPDATE ... WHERE state=...` claim and its own job routes with these.
+
 ## 0.2.15 (2026-11-24)
 
 ## 0.2.14 (2026-11-24)

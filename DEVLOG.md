@@ -4,6 +4,28 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-24
 
+**`workflow`: stages, gates and state machines the apps had each built (branch `claude/project-thread-daa05w`)**
+
+Asked to find what strata-listory, strata-stills and strata-reels share in their workflow, pipeline and state-machine code and to make one module they could all adopt. Read listory's ingest (`ingest/pipeline.py`, `ingest/store.py`: eleven stages, append-only events with metrics and data, resume, three review gates whose approval is bound to a signature of the evidence and can be given by policy) and its processing plan (`catalogue.PLAN_STATES`, `claim_plan`'s conditional UPDATE); stills' develop pipeline (`pipeline.py`: ordered stages with settings and versions, a key of all of them that finds a picture already made, timing per stage, rules that list what is missing); reels' `jobs.py`/`derived.py`/`results.py` (hash, then three assets keyed on the hash, the recipe's version and the parameters, each job queueing the next). reels' overview names strata-360's stage runner as the one to generalise "if it generalises cleanly", so that was read too (`pipeline/stages.py`, `runner.py`: stage version, config keys and dependencies in the key, `clear` with dependents, a state matrix) and is the model here. What differs per app (what a stage does, where heavy files go, stills' in-memory picture between stages) stays in the app.
+
+Decisions: a need's answer enters its dependents' keys with its key (not the answer alone), so a stage that writes files and returns little cannot leave the stages after it on old files; a stage whose need is not done is `blocked`, never run, even if its own record still matches; one queue job advances one subject through every stage it can, rather than a job per stage, because every reels job holds `disk` (they ran one at a time anyway) and listory ran its stages in one process; a failed stage lets the stages that do not need it run (strata-360's fail-soft) and then raises, so the queue's backoff and programming-error rules apply unchanged. Standard library apart from `workflow.store`, which uses the db extra as `tasks.queue` does.
+
+Jonathan then asked that storage be abstracted so stills could keep its run in memory or use its own key: `Store` was already a protocol (`MemoryStore`, `DbStore`, or the app's own), so `Pipeline` gained `key=` (a `KeyFn`, `default_key` otherwise; stills keeps its 10-character picture keys, which name its files, and regenerates nothing) and `json=False` (answers kept as returned, so a stage hands the next one the picture itself and stills' `State` object can go). An answer JSON cannot hold is compared by its record's key alone.
+
+He also asked how this sits with the job queue, which overlaps, and for common endpoints so strata-react can have one UI. The split kept: the queue is how work runs (one attempt, retry and backoff, resources, cancel, progress), the pipeline is what has been done to a subject (which stages hold for which inputs, which approvals stand); a pipeline never retries or schedules, and a queue job never knows about stages beyond its progress `stage` and its result. They meet in three places: `enqueue` (kind `workflow:<pipeline>`, domain `<pipeline>:<subject>`, the stages' resources), the progress stage, and `WorkflowRun.job`, found by that domain. No app had shared job routes (each spelled its own), so `tasks.web.add_jobs` adds them with `add_workflow` beside it; the contracts carry the state words so the generated TypeScript names them.
+
+- `src/strata_python/tasks/web.py` **new**: `add_jobs`, `job_task`.
+- `src/strata_python/workflow/web.py` **new**: `add_workflow`, `workflow_run`, `event`.
+- `src/strata_python/contracts.py`: `StageState`, `WorkflowState`, `StageEvent`, `StageRun`, `WorkflowRun`; `workflow.pipeline` takes its state words from here.
+- `tests/unit/test_workflow_web.py` **new**: every route through TestClient on a real SQLite queue and store.
+- `src/strata_python/workflow/__init__.py` **new**: the package's exports and where each rule came from.
+- `src/strata_python/workflow/pipeline.py` **new**: `Stage`, `step`, `gate`, `Context`, `Record`, `Store`, `MemoryStore`, `Outcome`, `Pipeline` (`key`, `states`, `advance`, `approve`, `clear`, `status`, `dependents`, `upto`), `request_key`.
+- `src/strata_python/workflow/machine.py` **new**: `StateMachine`, `InvalidTransition`.
+- `src/strata_python/workflow/store.py` **new**: `workflow_table`, `DbStore`, `enqueue`, `move`.
+- `tests/unit/test_workflow.py` **new**: keys, resume, fail-soft, gates (by hand and by policy), out-of-date approvals, clears, states, stopping, progress, the machine.
+- `tests/unit/test_workflow_store.py` **new**: the store, a queue job advancing a subject and `move`, on SQLite and Postgres.
+- `README.md`, `CHANGELOG.md`, `AGENTS.md`: the module row, the 6b migration note, the Unreleased line, the layout.
+
 **Frames by number and a typed shot-boundaries client, for strata-reels' scenes (branch `claude/project-thread-36vaj1`)**
 
 strata-reels' plan step 2 splits a tape into shots (strata-models' `shot-boundaries`) and groups them into scenes by how alike neighbouring shots look (CLIP, `image-embed`), which needs one picture per shot. A VHS shot is often shorter than the thumbnails' 10 s step, so the pictures are picked by frame number, and both pieces are general: any app that cuts footage into shots wants them.
