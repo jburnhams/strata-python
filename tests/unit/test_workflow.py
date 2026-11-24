@@ -306,3 +306,73 @@ def test_an_auto_gate_that_says_no_waits_for_a_person():
     p = tape(calls, auto=lambda c: c.output("proxy")["stage"] == "nothing")
     assert p.advance(store, "t", INPUTS).waiting == ["review"]
     assert p.key(p["review"], INPUTS, {}) is None  # no key while a need has no answer
+
+
+class Picture:
+    """Something JSON cannot hold, as stills' working picture is (a numpy array on the card)."""
+
+    def __init__(self, pixels: list[int]) -> None:
+        self.pixels = pixels
+
+
+class SidecarStore:
+    """An app's own store: the latest record per stage only, as stills keeps one sidecar per picture."""
+
+    def __init__(self) -> None:
+        self.files: dict[str, dict[str, Record]] = {}
+
+    def load(self, subject: str) -> dict[str, Record]:
+        return dict(self.files.get(subject, {}))
+
+    def save(self, subject: str, record: Record) -> None:
+        self.files.setdefault(subject, {})[record.stage] = record
+
+
+def stills_key(p: Pipeline, s: Any, inputs: Any, needs: Any) -> str:
+    """stills' own shape: the item, its source variant and every stage's settings, cut to 10 characters."""
+    return request_key(inputs.get("item"), [r.key for r in needs.values()], s.name, inputs.get("settings"))[:10]
+
+
+def test_a_memory_run_hands_pictures_on_and_keeps_the_app_s_keys():
+    seen: list[str] = []
+
+    def develop(ctx: Context) -> Any:
+        seen.append("develop")
+        return Picture([1, 2, 3])
+
+    def sharpen(ctx: Context) -> Any:
+        seen.append("sharpen")
+        return Picture([2 * x for x in ctx.output("develop").pixels])
+
+    def encode(ctx: Context) -> Any:
+        seen.append("encode")
+        return {"file": f"{ctx.key}.jpg", "max": max(ctx.output("sharpen").pixels)}
+
+    p = Pipeline(
+        "develop",
+        [
+            step("develop", develop, keys=("item",)),
+            step("sharpen", sharpen, needs=("develop",), keys=("settings",)),
+            step("encode", encode, needs=("sharpen",), keys=("item", "settings")),
+        ],
+        key=stills_key,
+        json=False,
+    )
+    store = SidecarStore()
+    inputs = {"item": "a~1", "settings": {"amount": 2}}
+    out = p.advance(store, "a~1", inputs)
+    assert out.state == "done"
+    made = out.records["encode"]
+    assert (len(made.key or ""), made.data) == (10, {"file": f"{made.key}.jpg", "max": 6})
+    assert isinstance(out.records["sharpen"].data, Picture)  # kept as it was returned
+    assert p.advance(store, "a~1", inputs).state == "done"
+    assert seen == ["develop", "sharpen", "encode"]  # found by its key: nothing made twice
+    p.advance(store, "a~1", {**inputs, "settings": {"amount": 1.5}})
+    assert seen[3:] == ["sharpen", "encode"]  # develop's key did not move
+
+
+def test_an_answer_json_cannot_hold_is_compared_by_its_key():
+    r = Record("a", DONE, "k", Picture([1]))
+    assert r.digest == Record("a", DONE, "k", Picture([2])).digest
+    assert r.digest != Record("a", DONE, "other", Picture([1])).digest
+    assert r.digest != Record("a", DONE, "k", None).digest

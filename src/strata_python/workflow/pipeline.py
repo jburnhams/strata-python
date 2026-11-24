@@ -63,8 +63,14 @@ class Record:
 
     @property
     def digest(self) -> str:
-        """What a dependent's key includes: this record's key and its answer."""
-        return request_key(self.key, self.data)
+        """What a dependent's key includes: this record's key and its answer. An answer JSON cannot hold (a picture
+        kept in memory, `Pipeline(json=False)`) cannot be compared, so then it is the key alone: the dependents run
+        again when this stage's key changes, not when its answer does."""
+        try:
+            answer = json.dumps(self.data, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError):
+            return request_key(self.key)
+        return request_key(self.key, answer)
 
     def as_json(self) -> Json:
         return {
@@ -135,6 +141,17 @@ class Context:
 
 
 Run = Callable[[Context], Any]
+
+KeyFn = Callable[["Pipeline", "Stage", Mapping[str, Any], Mapping[str, Record]], str]
+"""`key(pipeline, stage, inputs, needs)`: a stage's key from the inputs it names in `keys` and its needs' done records.
+The default is `default_key`; an app with keys of its own already in use (stills' picture keys, which name files on
+disk) passes its function and stays on them. Whatever it returns must change when a need's `digest` does, or a stage
+(and an approval) is not run again when the answer it read changes."""
+
+
+def default_key(pipeline: Pipeline, stage: Stage, inputs: Mapping[str, Any], needs: Mapping[str, Record]) -> str:
+    """request_key(pipeline, stage, version, the inputs it reads, each need's digest in the order it names them)."""
+    return request_key(pipeline.name, stage.name, stage.version, dict(inputs), [needs[n].digest for n in stage.needs])
 
 
 @dataclass(frozen=True)
@@ -227,9 +244,22 @@ class Pipeline:
     """Named stages in the order they run. A stage may need only stages before it, so the order is the dependency
     order and a whole run is one pass."""
 
-    def __init__(self, name: str, stages: Sequence[Stage], *, clock: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self,
+        name: str,
+        stages: Sequence[Stage],
+        *,
+        key: KeyFn = default_key,
+        json: bool = True,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        """`key` replaces how a stage's key is made (`KeyFn`). `json=False` keeps answers as the stages return them,
+        for a run whose records live in memory (`MemoryStore`, or the app's own `Store`): a stage can hand the next one
+        a picture as it is. `DbStore` still needs JSON and refuses anything else when it saves."""
         self.name = name
         self.stages: tuple[Stage, ...] = tuple(stages)
+        self.key_fn = key
+        self.json = json
         self.clock = clock
         self._by_name: dict[str, Stage] = {}
         for s in self.stages:
@@ -281,17 +311,16 @@ class Pipeline:
 
     def key(self, stage: Stage, inputs: Mapping[str, Any], records: Mapping[str, Record]) -> str | None:
         """The stage's key now, or None while a need has no done record."""
-        deps: list[str] = []
+        needs: dict[str, Record] = {}
         for n in stage.needs:
             r = records.get(n)
             if r is None or r.status != DONE:
                 return None
-            deps.append(r.digest)
+            needs[n] = r
         missing = [k for k in stage.keys if k not in inputs]
         if missing:
             raise KeyError(f"stage {stage.name!r} reads {', '.join(missing)}, which the inputs do not have")
-        mine = {k: inputs[k] for k in stage.keys}
-        return request_key(self.name, stage.name, stage.version, mine, deps)
+        return self.key_fn(self, stage, {k: inputs[k] for k in stage.keys}, needs)
 
     def states(self, records: Mapping[str, Record], inputs: Mapping[str, Any]) -> dict[str, StageState]:
         """Every stage's state (strata-360's matrix row, listory's review phase). A need that is not done blocks its
@@ -387,8 +416,11 @@ class Pipeline:
         started = time.monotonic()
         error: Exception | None = None
         try:
-            data = _json(s.run(ctx), f"what stage {s.name!r} returns")
-            metrics = _json(ctx.metrics, f"the metrics of stage {s.name!r}")
+            data = s.run(ctx)
+            metrics: Any = dict(ctx.metrics)
+            if self.json:
+                data = _json(data, f"what stage {s.name!r} returns")
+                metrics = _json(metrics, f"the metrics of stage {s.name!r}")
         except Exception as e:  # recorded, then raised by advance once the stages that do not need it have run
             error = e
             rec = Record(

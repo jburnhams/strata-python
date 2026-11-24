@@ -41,8 +41,10 @@ answer, makes its dependents (and an approval of it) out of date: a stage that w
 not leave the stages after it on the old files. A clear re-run that answers the same leaves them alone. A gate's record
 is an approval: its key is the key it was given for, so it holds only while the evidence it saw is current.
 
-Records go to a `Store`: `MemoryStore` here (tests, a CLI run, stills' in-process runs), `workflow.store.DbStore`
-(an append-only table in the app's database, with the db extra). Stages that must survive a restart run as one
+Records go to a `Store`, a two-method protocol (`load`, `save`): `MemoryStore` here (tests, a CLI run, stills'
+in-process runs), `workflow.store.DbStore` (an append-only table in the app's database, with the db extra), or the
+app's own (stills' sidecar JSON). `Pipeline(key=...)` swaps how keys are made, for an app whose keys already name
+things on disk; `Pipeline(json=False)` lets stages hand each other values JSON cannot hold, when the store is memory. Stages that must survive a restart run as one
 queue job per subject (`workflow.store.enqueue`): the queue gives the retry, the resources and the cancel, and a
 retried job resumes at the stage that failed.
 
@@ -56,6 +58,7 @@ from strata_python.workflow.pipeline import (
     DONE,
     FAILED,
     Context,
+    KeyFn,
     MemoryStore,
     Outcome,
     Pipeline,
@@ -63,6 +66,7 @@ from strata_python.workflow.pipeline import (
     Stage,
     StageState,
     Store,
+    default_key,
     gate,
     request_key,
     step,
@@ -74,6 +78,7 @@ __all__ = [
     "FAILED",
     "Context",
     "InvalidTransition",
+    "KeyFn",
     "MemoryStore",
     "Outcome",
     "Pipeline",
@@ -82,6 +87,7 @@ __all__ = [
     "StageState",
     "StateMachine",
     "Store",
+    "default_key",
     "gate",
     "request_key",
     "step",

@@ -179,3 +179,9 @@ def test_move_is_one_conditional_update(setup: Setup):
         assert c.execute(select(t.c.state, t.c.by)).one() == ("running", "ada")
         with pytest.raises(ValueError, match="'lost' is not a state"):
             move(c, PLAN, t, t.c.id == 1, "lost")
+
+
+def test_the_database_store_refuses_an_answer_json_cannot_hold(setup: Setup):
+    p = Pipeline("mem", [step("a", lambda c: object())], json=False)
+    with pytest.raises(TypeError):
+        p.advance(DbStore(setup.engine, setup.events, p), "s", {})
