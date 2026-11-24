@@ -159,6 +159,8 @@ def measure(source: bytes | str | os.PathLike[str]) -> WavLevels:
     `read_wav(channels=None, min_rate=1)` refuses."""
     with io.BytesIO(source) if isinstance(source, bytes) else Path(source).open("rb") as f:
         info = _header(f)
+        if info.sample_rate < 1:  # `wave` reads a rate of 0 from a broken header, and every length divides by it
+            raise WavError("The recording's header gives no sample rate.")
         if info.sample_width not in (2, 3):
             raise WavError(f"Send 16-bit or 24-bit samples; this recording has {info.sample_width * 8}-bit.")
         f.seek(0)

@@ -125,3 +125,7 @@ def test_measure_refuses_what_it_cannot_decode() -> None:
         measure(sine_wav(0.1, width=1))
     with pytest.raises(WavError, match="not a WAV"):
         measure(b"RIFFnope")
+    broken = bytearray(sine_wav(0.1))
+    broken[24:28] = (0).to_bytes(4, "little")  # the fmt chunk's sample rate
+    with pytest.raises(WavError, match="no sample rate"):
+        measure(bytes(broken))

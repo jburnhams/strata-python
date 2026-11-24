@@ -9,6 +9,12 @@ def test_normalises_case_punctuation_and_apostrophes() -> None:
     ]  # fmt: skip
     assert normalise("  snake_case\tand\nlines ") == ["snake", "case", "and", "lines"]
     assert normalise("") == []
+    assert normalise("a + b = c; 50% #tag") == ["a", "b", "c", "50", "tag"]
+
+
+def test_keeps_combining_marks_inside_a_word() -> None:
+    assert normalise("\u0915\u0940 \u0915\u0947") == ["\u0915\u0940", "\u0915\u0947"]  # Devanagari "ki", "ke": the vowel signs stay
+    assert word_errors("\u0915\u0940", "\u0915\u0947").wer == 1.0
 
 
 def test_an_exact_transcript_has_no_errors() -> None:

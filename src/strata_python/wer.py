@@ -9,7 +9,8 @@ other: a recording studio asks again for a take whose words were not the prompt'
     [(e.op, e.said, e.heard) for e in errors.edits]     # ('ok', 'the', 'the'), ..., ('delete', 'brown', None), ...
 
 Both sides are normalised the same way first (`normalise`): lower case, Unicode NFKC, curly apostrophes made straight,
-punctuation and hyphens out (apostrophes inside a word kept, so "don't" is one word), whitespace collapsed. Number
+punctuation, symbols and hyphens out (apostrophes inside a word kept, so "don't" is one word; combining marks kept,
+so a vowel sign stays part of its word), whitespace collapsed. Number
 words are not unified: "ten" against "10" counts as an error, which a caller that writes prompts can avoid by
 spelling numbers out. The alignment is the plain Levenshtein one (each substitution, deletion and insertion costs 1),
 computed in O(said x heard), which is nothing for a sentence and fine for a paragraph."""
@@ -27,7 +28,10 @@ Op = Literal["ok", "substitute", "delete", "insert"]
 def normalise(text: str) -> list[str]:
     """The words of `text`, the way both sides of a comparison are read."""
     t = unicodedata.normalize("NFKC", text).lower().replace("\u2019", "'").replace("\u2018", "'")
-    t = re.sub(r"[^\w\s']|_", " ", t)
+    # Punctuation, symbols, separators and controls become spaces, by Unicode category rather than `[^\w]`: `\w`
+    # leaves out combining marks, so it would split a Devanagari word at its vowel sign and read different words
+    # as the same. The straight apostrophe stays here; the next line keeps it only inside a word.
+    t = "".join(" " if c != "'" and unicodedata.category(c)[0] in "PSZC" else c for c in t)
     t = re.sub(r"(?<!\w)'|'(?!\w)", " ", t)
     return t.split()
 
