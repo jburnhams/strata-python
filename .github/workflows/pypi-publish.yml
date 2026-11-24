@@ -26,6 +26,8 @@ jobs:
     permissions:
       id-token: write # trusted publishing
       contents: read
+    env:
+      STRATA_TEST_FFMPEG: "1"   # as in ci.yml: media's and derive's tests run the real ffmpeg, and fail if it is missing
     steps:
       - uses: actions/checkout@v7
         with:
@@ -34,6 +36,10 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync --locked
+      # Without it media's and derive's tests skip, coverage falls under the floor and the gate refuses the upload
+      # (v0.2.11 was refused that way).
+      - name: ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: The tag and pyproject.toml agree
         run: test "v$(uv version --short)" = "${{ inputs.tag || github.ref_name }}"
       - run: uv run --locked strata-check

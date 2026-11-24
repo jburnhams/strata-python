@@ -12,6 +12,12 @@ Tubes declares `ffmpeg` on its `Settings` and its doctor checks that path, but `
 - `tests/unit/test_media.py`: the order of the lookup and a changing setting, and a real probe and ffmpeg run found only through `configure` with the environment variables pointing elsewhere.
 - `README.md`: the module row and the migration note.
 
+**The publish workflow installs ffmpeg (branch `claude/project-thread-42bdk4`)**
+
+v0.2.11 was tagged and released on GitHub but not uploaded: `pypi-publish.yml` runs `strata-check` on the tag, and with no ffmpeg on its runner the `media` and `derive` tests skip, which put unit coverage under the 95% floor. `ci.yml` installs ffmpeg and sets `STRATA_TEST_FFMPEG=1`; the publish job now does the same. v0.2.11 then needs publishing by hand (the workflow's `tag` input), since the tag's own run has failed.
+
+- `.github/workflows/pypi-publish.yml`: an ffmpeg step and `STRATA_TEST_FFMPEG=1`.
+
 ## 2026-11-23
 
 **Main's CI red on a Ticker test; `derive` listed under the wrong release (branch `claude/project-thread-42bdk4`)**
