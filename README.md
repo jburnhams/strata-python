@@ -10,8 +10,8 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 | `strata_python.cli` | `add_doctor` (imports, labels, optional modules and the app's own `Check`s), `add_set`, `add_serve`, `add_openapi` (the schema file for strata-react's `strata-api-types`) for the app's argparse subcommands |
 | `strata_python.contracts` | The shapes the apps' APIs share, as pydantic models for `response_model`: `Health`, `SystemInfo`, `ErrorBody`, `Task` (with `TaskState`), `Progress`, `Page[T]`, `FileRef`, `Judgment`; `ApiModel`, a base for the app's own responses whose defaulted fields stay required in the schema |
 | `strata_python.client` | `ServiceClient`, the standard-library base for calling a strata service: JSON calls, `Rejected` (4xx, with the reason and payload) and `Unavailable` (down or 5xx), retried reads, a long-poll `wait`, `available()`, and `env_url` |
-| `strata_python.tasks` | Work outside a request: `next_state`/`backoff_s`/`RetryLater` (when to retry), `report_progress` and `ProgressReporter` (throttled), `SingleFlight` (one run per key, `Conflict` on a second), `StatusFile` and `Detached` (a process that outlives the server), `Ticker` (a loop that survives its errors, can choose its next wait and be woken early), and with the `[db]` extra `tasks.queue` (`Queue`, `Worker`, `jobs_table`: durable jobs with retry, dedupe, resources, cancel and crash recovery) |
-| `strata_python.workflow` | Work in named, versioned stages over one subject: `Pipeline` of `step`s and `gate`s (a person's approval, or `auto` from a policy), each stage cached by a key of its version, the inputs it reads and its needs' answers, so a re-run does only what changed; `advance` resumes where it stopped, runs the rest when one stage fails and stops at a gate; `approve`, `clear` (with its dependents), `status` (done, ready, stale, failed, waiting, blocked per stage); `Store` (a two-method protocol: `MemoryStore`, or the app's own), `Pipeline(key=...)` (the app's own keys) and `Pipeline(json=False)` (stages hand each other in-memory values); `request_key`; `StateMachine` (a row's declared transitions, `InvalidTransition` is a 400). With the `[db]` extra `workflow.store`: `workflow_table`, `DbStore` (append-only records in the app's database), `enqueue` (a queue job per subject) and `move` (a state change as one conditional UPDATE) |
+| `strata_python.tasks` | Work outside a request: `next_state`/`backoff_s`/`RetryLater` (when to retry), `report_progress` and `ProgressReporter` (throttled), `SingleFlight` (one run per key, `Conflict` on a second), `StatusFile` and `Detached` (a process that outlives the server), `Ticker` (a loop that survives its errors, can choose its next wait and be woken early), and with the `[db]` extra `tasks.queue` (`Queue`, `Worker`, `jobs_table`: durable jobs with retry, dedupe, resources, cancel and crash recovery) and `tasks.web.add_jobs` (`/api/jobs`: list, counts, one, cancel, retry, answering the shared `Task`) |
+| `strata_python.workflow` | Work in named, versioned stages over one subject: `Pipeline` of `step`s and `gate`s (a person's approval, or `auto` from a policy), each stage cached by a key of its version, the inputs it reads and its needs' answers, so a re-run does only what changed; `advance` resumes where it stopped, runs the rest when one stage fails and stops at a gate; `approve`, `clear` (with its dependents), `status` (done, ready, stale, failed, waiting, blocked per stage); `Store` (a two-method protocol: `MemoryStore`, or the app's own), `Pipeline(key=...)` (the app's own keys) and `Pipeline(json=False)` (stages hand each other in-memory values); `request_key`; `StateMachine` (a row's declared transitions, `InvalidTransition` is a 400). With the `[db]` extra `workflow.store`: `workflow_table`, `DbStore` (append-only records in the app's database), `enqueue` (a queue job per subject) and `move` (a state change as one conditional UPDATE), and `workflow.web.add_workflow` (the same routes for every pipeline: list subjects by state, one subject's `WorkflowRun`, a stage's history, run, approve, clear) |
 | `strata_python.files` | Atomic writes (`atomic_path` keeps the extension for ffmpeg, `atomic_open`, `write_json_atomic`, `write_text_atomic`, `write_bytes_atomic`), `read_json(path, default)`, `sha256`/`sha256_hex`, `quick_fingerprint` (size and both ends), `stat_key` (a cache key that follows the file), `inside(root, path)` (refuses `..` and links out), and `DiskCache` (values on disk with an age; `json(key, fetch, max_age_s)`) |
 | `strata_python.http` | `Http(user_agent, min_interval=...)`, the polite client for other people's APIs: a gap per host across threads (and processes with `throttle_file`), Retry-After as seconds or a date, a cool-down for a host that keeps saying 429, retries that never replay a write, a size cap, an optional `DiskCache`, and errors returned as a `Reply` (`raise_for_status()`, `get_json()` for code that wants exceptions) |
 | `strata_python.media` | `probe(path)` (a typed `Probe`: duration, format, tags, streams, chapters, ffprobe's warnings), `duration`, `ffmpeg(args, progress=...)` (or `sink=` for stdout in chunks) raising `MediaError` with ffmpeg's own reason, `available()`, `configure(ffmpeg=..., ffprobe=...)` (the app's own setting for where the tools are) |
@@ -242,25 +242,32 @@ from strata_python.workflow.store import DbStore, enqueue, workflow_table
 
 STAGES = workflow_table(Base.metadata)  # models.py, with a revision
 
-INGEST = Pipeline("ingest", [
-    step("inventory", inventory, version=3, keys=("folder",), resources=("disk",)),
-    step("metadata", metadata, needs=("inventory",), keys=("providers",)),
-    gate("book", needs=("metadata",), auto=lambda c: policy.passes(c.output("metadata"))),
-    step("plan", make_plan, needs=("book", "metadata"), version=2),
-])
+INGEST = Pipeline(
+    "ingest",
+    [
+        step("inventory", inventory, version=3, keys=("folder",), resources=("disk",)),
+        step("metadata", metadata, needs=("inventory",), keys=("providers",)),
+        gate("book", needs=("metadata",), auto=lambda c: policy.passes(c.output("metadata"))),
+        step("plan", make_plan, needs=("book", "metadata"), version=2),
+    ],
+)
+
 
 def advance_ingest(job: Job) -> dict:  # module level: HANDLERS = {INGEST.kind: advance_ingest}
     book = load(job.options["subject"])
     store = DbStore(engine(), STAGES, INGEST)
     return INGEST.advance(store, job.options["subject"], inputs_of(book), book, stopping=lambda: job.stopping).as_json()
 
-enqueue(QUEUE, INGEST, "book:12")                          # one job per subject; holds the stages' resources
+
+enqueue(QUEUE, INGEST, "book:12")  # one job per subject; holds the stages' resources
 INGEST.approve(store, "book:12", "book", inputs, by=user)  # then enqueue again
-INGEST.clear(store, "book:12", "metadata")                 # it and what depends on it run again
-INGEST.status(store, "book:12", inputs).as_json()          # {state, waiting, failed, stages: {name: state}}
+INGEST.clear(store, "book:12", "metadata")  # it and what depends on it run again
+INGEST.status(store, "book:12", inputs).as_json()  # {state, waiting, failed, stages: {name: state}}
 ```
 
   A run that lives in memory (stills develops one picture in one go) passes `MemoryStore()` or its own `Store` (any class with `load(subject)` and `save(subject, record)`), `Pipeline(json=False)` so a stage can hand the next one a picture as it is, and `Pipeline(key=fn)` where the app's keys already name its files (`fn(pipeline, stage, inputs, needs)`, which must change when a need's `digest` does).
+
+  The routes are the same in every app, so strata-react can draw them without app glue: `tasks.web.add_jobs(app, lambda: QUEUE)` adds `/api/jobs` (a `Page[Task]` filtered by state, kind and domain; counts; one job; cancel; retry), and `workflow.web.add_workflow(app, INGEST, store=..., inputs=inputs_of, queue=lambda: QUEUE)` adds `/api/workflows/ingest/subjects[/{subject}[/run | /stages/{stage}[/approve | /clear]]]`, answering `WorkflowRun` (each stage's `StageRun`: state, whether it is a gate, its last `StageEvent`; and the `Task` advancing it, found by the job's domain `ingest:<subject>`). `inputs(subject)` raises KeyError for a subject the app does not have (a 404). The queue is how work runs (retry, resources, cancel, progress); the pipeline is what has been done to a subject. A workflow job's progress names the stage it is on, and its result is the `Outcome`.
 
   A stage that raises is recorded as failed, the stages that do not need it still run, and the error is raised at the end, so the job retries with the queue's backoff and the next attempt starts at the failed stage. A row with a life of its own (a plan proposed, approved, running) is a `StateMachine`; `check(frm, to)` refuses a wrong move with a sentence and `workflow.store.move(conn, MACHINE, table, where, "running")` claims it with one conditional UPDATE.
 

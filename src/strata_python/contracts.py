@@ -10,6 +10,9 @@ generated from it instead of copied.
   ErrorBody     every error response: detail, and a payload when the error carries one (web.add_error_handlers)
   Task          a job or task row: id, kind, state, times, error, result, progress (tasks.Queue answers these)
   Progress      how far a task has got: done of total, a line of text, the stage (tasks.ProgressReporter writes these)
+  StageRun      one stage of a pipeline for a subject: its state, whether it is a gate, its latest record (workflow)
+  WorkflowRun   a subject's way through a pipeline: one word for the whole, the stages, the job advancing it (workflow.web)
+  StageEvent    one record of a stage's history, with its answer (workflow.web)
   Page[T]       one page of a list: items, the cursor for the next page (None at the end), the total when it is known
   FileRef       a file by content and place: sha256, size, mtime, root, rel (the path under that root)
   Judgment      one pairwise choice by a person or a model: a, b, the winner (a, b or tie), who, when, undone when
@@ -123,6 +126,51 @@ class Task(ApiModel):
     progress: Progress | None = None
     attempts: int = 0
     domain: str | None = None  # what the task is about in the app's terms (a book id, a folder)
+
+
+StageState = Literal["done", "ready", "stale", "failed", "waiting", "blocked"]
+"""A stage's state for a subject (`strata_python.workflow`): done, ready (never run), stale (ran for another key),
+failed (raised for its key), waiting (a gate not approved for its needs' answers), blocked (a need is not done)."""
+
+WorkflowState = Literal["done", "failed", "waiting", "blocked", "stopped"]
+"""One word for a subject's whole way through a pipeline: failed before waiting, waiting before done."""
+
+
+class StageEvent(ApiModel):
+    """One record of a stage: `status` done, failed or cleared; `by` who approved a gate or cleared it; `data` the
+    stage's answer (or a gate's value), sent only where one stage's history is asked for."""
+
+    stage: str
+    status: str
+    at: datetime.datetime
+    elapsed_s: float = 0.0
+    metrics: dict[str, Any] = Field(default_factory=lambda: {})
+    error: str | None = None
+    by: str | None = None
+    data: Any = None
+
+
+class StageRun(ApiModel):
+    """A stage of a pipeline as one subject stands: what a step list on screen draws, a row per stage."""
+
+    name: str
+    title: str
+    gate: bool
+    needs: list[str] = Field(default_factory=lambda: [])
+    state: StageState
+    last: StageEvent | None = None  # its latest record, without its answer
+
+
+class WorkflowRun(ApiModel):
+    """One subject's way through one pipeline, and the queue job advancing it now (or the last one), if any."""
+
+    pipeline: str
+    subject: str
+    state: WorkflowState
+    waiting: list[str] = Field(default_factory=lambda: [])
+    failed: list[str] = Field(default_factory=lambda: [])
+    stages: list[StageRun] = Field(default_factory=lambda: [])
+    job: Task | None = None
 
 
 T = TypeVar("T")

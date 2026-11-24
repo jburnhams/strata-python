@@ -8,24 +8,17 @@ import json
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
+from strata_python.contracts import StageState, WorkflowState
 from strata_python.tasks.progress import report_progress
 
 DONE, FAILED, CLEARED = "done", "failed", "cleared"
 """A record's status: the stage ran (or the gate was approved), it raised, or it was cleared (forgotten, or an
 approval taken back). Records are appended, never changed: the latest per stage is its state."""
 
-StageState = Literal["done", "ready", "stale", "failed", "waiting", "blocked"]
-"""Where a stage stands for a subject now:
-
-- done: its latest record is done for the key it would have now (nothing to do)
-- ready: its needs are done and it has never run (or was cleared)
-- stale: it ran, but for another key (a new version, a changed input or an upstream answer): it runs again
-- failed: it raised for the key it has now; `advance` runs it again (the queue's backoff decides when)
-- waiting: a gate whose needs are done, not approved for their current answers
-- blocked: a need is not done (what it ran before is judged again once the need is)
-"""
+# A stage's state: done, ready, stale, failed, waiting or blocked. Declared with the API shapes (`contracts`), so the
+# web app's generated types name the same words.
 
 Json = dict[str, Any]
 
@@ -108,6 +101,9 @@ class MemoryStore:
 
     def history(self, subject: str) -> list[Record]:
         return list(self.events.get(subject, []))
+
+    def subjects(self) -> list[str]:
+        return list(self.events)
 
 
 @dataclass
@@ -223,7 +219,7 @@ class Outcome:
         return [s for s, st in self.states.items() if st == "failed"]
 
     @property
-    def state(self) -> Literal["done", "failed", "waiting", "blocked", "stopped"]:
+    def state(self) -> WorkflowState:
         """One word for the whole: failed before waiting (a failure needs looking at, a gate only a decision)."""
         if self.failed:
             return "failed"

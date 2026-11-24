@@ -12,6 +12,12 @@ Decisions: a need's answer enters its dependents' keys with its key (not the ans
 
 Jonathan then asked that storage be abstracted so stills could keep its run in memory or use its own key: `Store` was already a protocol (`MemoryStore`, `DbStore`, or the app's own), so `Pipeline` gained `key=` (a `KeyFn`, `default_key` otherwise; stills keeps its 10-character picture keys, which name its files, and regenerates nothing) and `json=False` (answers kept as returned, so a stage hands the next one the picture itself and stills' `State` object can go). An answer JSON cannot hold is compared by its record's key alone.
 
+He also asked how this sits with the job queue, which overlaps, and for common endpoints so strata-react can have one UI. The split kept: the queue is how work runs (one attempt, retry and backoff, resources, cancel, progress), the pipeline is what has been done to a subject (which stages hold for which inputs, which approvals stand); a pipeline never retries or schedules, and a queue job never knows about stages beyond its progress `stage` and its result. They meet in three places: `enqueue` (kind `workflow:<pipeline>`, domain `<pipeline>:<subject>`, the stages' resources), the progress stage, and `WorkflowRun.job`, found by that domain. No app had shared job routes (each spelled its own), so `tasks.web.add_jobs` adds them with `add_workflow` beside it; the contracts carry the state words so the generated TypeScript names them.
+
+- `src/strata_python/tasks/web.py` **new**: `add_jobs`, `job_task`.
+- `src/strata_python/workflow/web.py` **new**: `add_workflow`, `workflow_run`, `event`.
+- `src/strata_python/contracts.py`: `StageState`, `WorkflowState`, `StageEvent`, `StageRun`, `WorkflowRun`; `workflow.pipeline` takes its state words from here.
+- `tests/unit/test_workflow_web.py` **new**: every route through TestClient on a real SQLite queue and store.
 - `src/strata_python/workflow/__init__.py` **new**: the package's exports and where each rule came from.
 - `src/strata_python/workflow/pipeline.py` **new**: `Stage`, `step`, `gate`, `Context`, `Record`, `Store`, `MemoryStore`, `Outcome`, `Pipeline` (`key`, `states`, `advance`, `approve`, `clear`, `status`, `dependents`, `upto`), `request_key`.
 - `src/strata_python/workflow/machine.py` **new**: `StateMachine`, `InvalidTransition`.
