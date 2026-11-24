@@ -13,7 +13,10 @@ def test_normalises_case_punctuation_and_apostrophes() -> None:
 
 
 def test_keeps_combining_marks_inside_a_word() -> None:
-    assert normalise("\u0915\u0940 \u0915\u0947") == ["\u0915\u0940", "\u0915\u0947"]  # Devanagari "ki", "ke": the vowel signs stay
+    assert normalise("\u0915\u0940 \u0915\u0947") == [
+        "\u0915\u0940",
+        "\u0915\u0947",
+    ]  # Devanagari "ki", "ke": the vowel signs stay
     assert word_errors("\u0915\u0940", "\u0915\u0947").wer == 1.0
 
 
