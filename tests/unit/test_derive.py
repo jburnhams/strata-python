@@ -228,12 +228,12 @@ def test_two_thumbnail_runs_into_one_folder_do_not_share_a_staging_folder(clips,
 
 
 def _brightness(path) -> float:
+    # the picture shrunk to one grey pixel by averaging (not a lavfi `movie=` source: a Windows path's colon breaks it)
     out = subprocess.run(
-        ["ffprobe", "-v", "error", "-f", "lavfi", "-i", f"movie={path},signalstats",
-         "-show_entries", "frame_tags=lavfi.signalstats.YAVG", "-of", "csv=p=0"],
-        capture_output=True, text=True, check=True,
+        ["ffmpeg", "-v", "error", "-i", str(path), "-vf", "scale=1:1:flags=area,format=gray", "-f", "rawvideo", "-"],
+        capture_output=True, check=True,
     )  # fmt: skip
-    return float(out.stdout.split()[0])
+    return float(out.stdout[0])
 
 
 @needs_ffmpeg
