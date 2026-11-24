@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.13 (2026-11-24)
+
 ### Added
 
 - `media.configure(ffmpeg=..., ffprobe=...)`: an app with its own setting for the tools says where they are, as a path or a function read on every run (`media.configure(ffmpeg=lambda: settings.get("ffmpeg"))`), so `probe`, `duration`, `ffmpeg`, `derive` and `available()` run the program the setting names; when it gives nothing the environment and the PATH apply as before, and a setting that names no runnable program is a `MediaError` that says so (#60). Replace an app's own `subprocess` call kept for its ffmpeg setting with `media.ffmpeg`.
