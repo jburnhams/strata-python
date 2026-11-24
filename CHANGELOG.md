@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.14 (2026-11-24)
+
 ### Added
 
 - `wav.measure(data_or_path)` returns `WavLevels` (`peak_db`, `clipped`, `noise_db`, `speech_db`, `snr_db`, `seconds`) of a 16- or 24-bit PCM WAV: the levels a studio judges a take of speech by. Replace an app's own sample loop.
