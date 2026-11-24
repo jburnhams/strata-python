@@ -20,7 +20,8 @@ extra: `strata-python[db]`.
 
 Migrations: `strata-db revision -m "..."` (autogenerate), `strata-db migrate`, `strata-db check`; or in code
 `Project.load(__file__).upgrade(engine)` (or `.open()`, connect and migrate) at service start; a FastAPI server
-uses `strata_python.db.web.add_database` and its `DbSession` dependency. Tests: the plugin's `db_session` / `db_engine` / `db_url`
+uses `strata_python.db.web.add_database` and its `DbSession` dependency; writes an outbox retries go through
+`insert_once` and `lock_row` (`strata_python.db.writes`). Tests: the plugin's `db_session` / `db_engine` / `db_url`
 / `db_env` fixtures and `strata_python.db.testing`. See the README.
 
 The names load on first use: the pytest plugin imports `strata_python.db.guard` in every app with strata-python
@@ -73,6 +74,9 @@ if TYPE_CHECKING:
     from .models import Base as Base
     from .models import make_base as make_base
     from .project import Project as Project
+    from .writes import ConflictingWrite as ConflictingWrite
+    from .writes import insert_once as insert_once
+    from .writes import lock_row as lock_row
 
 _WHERE = {
     "DatabaseNotConfigured": "config",
@@ -93,6 +97,9 @@ _WHERE = {
     "Base": "models",
     "make_base": "models",
     "Project": "project",
+    "ConflictingWrite": "writes",
+    "insert_once": "writes",
+    "lock_row": "writes",
 }
 __all__ = [  # noqa: RUF022  (grouped as _WHERE is)
     "DatabaseNotConfigured",
@@ -113,6 +120,9 @@ __all__ = [  # noqa: RUF022  (grouped as _WHERE is)
     "Base",
     "make_base",
     "Project",
+    "ConflictingWrite",
+    "insert_once",
+    "lock_row",
 ]
 
 

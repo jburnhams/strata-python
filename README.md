@@ -18,6 +18,7 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 | `strata_python.derive` | Files an editor shows, made from footage: `proxy(src, out)` (H.264 MP4 for the browser, deinterlaced for display, square pixels, a keyframe every half second, the source's frames at the source's times), `thumbnails(src, folder, every=10)` (`Thumb(time, path)`, exact times), `frames(src, folder, [n, ...])` (`Frame(number, path)`, one picture per chosen frame: one per shot), `peaks(src, per_second=50)` (lowest and highest sample per slice, strata-react `Waveform`'s pair), `interlacing(path)` (the stream's field order, else ffmpeg's `idet`), and `RECIPE` versions for an app's cache key |
 | `strata_python.mediatime` | Exact time for media: `rational` seconds (Fraction), `Rate` (`frame_at`, `time_of`, `snap`), half-open `Span`, and `TimeMap` from an edit's output time to its sources and back, with exact JSON |
 | `strata_python.wav` | `read_wav(data_or_path, max_seconds=...)` checks an uploaded PCM WAV's header with the standard library (mono, 16 or 24-bit, 16 kHz and up by default; `channels`, `widths`, `min_rate`, `min_seconds` change it) and returns a `WavInfo`; anything else is a `WavError` (a `ValueError`, so a 400) with a sentence. strata-react's `useRecorder` writes what it accepts. `measure(data_or_path)` decodes it and returns `WavLevels`: `peak_db`, `clipped` (samples at full scale), `noise_db` (the quietest tenth of 20 ms windows), `speech_db` (the loudest twentieth) and `snr_db`, for judging a take of speech |
+| `strata_python.speech` | A library of spoken clips for an app that speaks fixed lines: `ClipStore(root)` (a manifest of line -> `Clip` with its source, voice, model and settings hash, and WAVs named by content), `build(store, lines, app=, voice=, params=, per_line=, now=)` (makes the missing or out-of-date clips with strata-models' `speak` role, never remakes a person's recording, reports each failed line) and `add_clip_routes(app, store, prefix, recordable=)` (the clip list, the clips cached for good, and a person's recordings in and out) |
 | `strata_python.wer` | `word_errors(said, heard)` aligns a transcript with the text meant: `.wer`, `.missed` (words meant but not heard as themselves), `.extra`, and `.edits` (`ok`, `substitute`, `delete`, `insert`); `normalise(text)` is how both sides are read (case, punctuation and curly apostrophes out) |
 | `strata_python.images` (extra `[images]`) | `thumbnail(src, px, cache_dir=...)` (an upright JPEG, made once, keyed on the file, never enlarged, the app's own reader through `make=`), `open_upright`, `flatten` (alpha and 16-bit greys to 8-bit RGB), `jpeg_bytes` |
 | `strata_python.stats` | Pairwise rankings and eval statistics in pure Python: `bradley_terry` (ties, an optional side advantage, Elo-scale `ratings()`), `intervals` (bootstrap), `head_to_head`, `votes_from(judgments)`, `wilson`, `mcnemar`, `holm` |
@@ -25,7 +26,7 @@ Common code for the strata Python web server apps (FastAPI + CLI), the Python co
 | `strata_python.http_server` / `live` | A real scripted HTTP server and a real uvicorn server on loopback, for tests that make actual requests |
 | pytest plugin | Loaded automatically: hermetic home and data folders (`strata_env` adds the app's own variables), a no-network guard, `http_server` and `live_app`, the `fake_urlopen`, `fake_popen`, `fake_run` and `no_sleep` fixtures, `fake_models` (a stand-in strata-models), and the `integration` marker on everything under `tests/integration` |
 | `strata_python.testing` | The fakes behind those fixtures (`FakeResponse`, `http_error`, `FakeUrlopen`, `FakePopen`, `FakeRun`, `Sleeper`) `FakeModels`, the CLI runners `run_cli(main, *args)` and `run_module("myapp", *args, src=...)`, `assert_openapi_current(create_app, path)`, and `sine_wav(seconds, rate=, width=, channels=, amplitude=, lead=, tail=, noise=)` (real WAV bytes for upload tests: a tone with quiet before and after it and a room's noise under it, clipped above amplitude 1) |
-| `strata_python.db` (extra `[db]`) | The shared database: `connect("myapp")` (the app's schema of one shared Postgres, or a SQLite path), a declarative base with the shared `NAMING_CONVENTION` for typed models, Alembic migrations with no per-app `env.py`, the live-database guard, the `strata-db` command, the `db_*` fixtures (SQLite by default, a throwaway Postgres with `--pg`), and `strata_python.db.web` (`add_database`, `DbSession`) for a server's records |
+| `strata_python.db` (extra `[db]`) | The shared database: `connect("myapp")` (the app's schema of one shared Postgres, or a SQLite path), a declarative base with the shared `NAMING_CONVENTION` for typed models, Alembic migrations with no per-app `env.py`, the live-database guard, the `strata-db` command, the `db_*` fixtures (SQLite by default, a throwaway Postgres with `--pg`), `strata_python.db.web` (`add_database`, `DbSession`) for a server's records, and `insert_once` and `lock_row` for writes strata-react's `createOutbox` sends and retries |
 | `strata_python.pages` (extra `[pdf]`) | A scanned page described as blocks, lines, styled spans and figures in scan pixels, drawn as a PDF with real embedded fonts (`render`), and read back as pixels at the scan's dpi (`rasterise`) and as text (`read_text`): for rebuilding scanned books, and for scoring a rebuild with the renderer that prints it |
 | `strata-check` | The one gate: lockfile, ruff, `ruff format`, pyright strict, ty, unit tests with coverage |
 | `strata-public-check` | Fails on email addresses, private IPv4 addresses, home-folder paths, the repo's own `[tool.strata-public-check] deny` regexes and the owner's `STRATA_PUBLIC_DENY` ones in a tree, sdist or wheel; run before anything public is published. Reads Python, web source (`.ts`, `.tsx`, `.js`, `.css`, `.html`, `.mdx`, `.svg`...) and config text; in a git checkout only what git would commit, so tool output such as `.coverage` is skipped. Silence a false positive with `[tool.strata-public-check] exclude = ["web/package-lock.json"]` (or `--exclude`), or `strata-public-check: ignore` on the line (never applies to `STRATA_PUBLIC_DENY`) |
@@ -204,6 +205,23 @@ with sm.gpu_lease("strata-stills", vram_gb=4):
 ```
 
 The shortcuts still return the service's JSON, so existing code keeps working, and the result classes keep all of it in `.raw`. There is one shortcut for every role the service runs (`sm.ROLES`): `faces`, `face_kind`, `transcribe` (also `role="transcribe-fast"`), `ocr`, `speak`, `denoise_audio`, `audio_quality`, `generate_image`, `embed`, `enhance_video` and `shot_boundaries`, plus `ask` for the language-model roles (`vision-language`, `text`, and the judges). Each has a result class (`Answer`, `GeneratedImage`, `Embeddings`, `FaceKinds`, `CleanAudio`, `AudioQuality`, `EnhancedVideo`, `Shots` and the four above). In tests, the `fake_models` fixture (section 7) stands in for the service, so the app's tests need neither the service nor a GPU. The roles `models.toml` lists without a runtime yet (sound-events, speaker-embedding, detect-people, upscale, denoise, nsfw) have none: `run(role, params, app)` reaches them once the service serves them.
+
+An app that speaks fixed lines (prompts, feedback) keeps each one as a clip made once by the `speak` role, with the browser's voice only as the fallback (`strata_python.speech`, issue #73):
+
+```python
+from strata_python.clients import models as sm
+from strata_python.speech import ClipStore, add_clip_routes, build
+
+store = ClipStore(os.path.join(SETTINGS.home(), "voice"))  # keep it out of git if it holds recordings
+built = build(
+    store, lines(), app="myapp", voice="bf_emma", params={"language": "en-gb", "seed": 0},
+    per_line=lambda line: None if needs_a_person(line) else {},  # None: not made, listed in built.skipped
+    now=sm.role_settings("speak"),  # remakes a clip when the role's model or settings change
+)
+add_clip_routes(app, store, "/api/v1/voice", recordable=needs_a_person)
+```
+
+`GET /api/v1/voice` is `ClipsOut` (line -> a relative clip URL for strata-react's clip list), `GET .../clips/<name>` the WAV with an immutable cache header, `PUT .../recordings?line=` a person's WAV (`ClipOut`, kept over any made clip, also when `build` is running at the time) and `DELETE` forgets it. Which lines exist and how a sentence is cut into lines stay in the app.
 
 ### 6. OS helpers
 
@@ -406,6 +424,22 @@ migrations = "migrations"        # the app's Alembic revisions, unchanged
   ```
 
   The engine is opened and migrated on the first request that needs one (a server nobody records on never creates a database), kept on `app.state` and disposed when the server stops, after the app's own lifespan. A failure to open is that request's error and is tried again on the next. Delete the app's `db.py` fallback, its session dependency and the conftest that disposed the engine.
+- Writes strata-react's `createOutbox` sends (issue #74): each carries a client-made id and is retried until the server answers, so take it once:
+
+  ```python
+  from strata_python.db import insert_once, lock_row
+
+  lock_row(db, Learner, a.learner_id)  # serialise one learner's writes (FOR UPDATE on Postgres, the write lock on SQLite)
+  row, duplicate = insert_once(
+      db, Attempt, a.event_id,
+      make=lambda: judge(db, a),  # runs only for an id not seen yet
+      same=lambda old: (old.choice, utc(old.at)) == (a.choice, a.at),  # what the client sent
+  )
+  if not duplicate:
+      db.commit()
+  ```
+
+  A retry with the same contents gets the stored row back (`duplicate=True`, nothing written, the lock let go); one with other contents is `ConflictingWrite`, a 409 through `add_error_handlers`. `lock_row` returns the row read under the lock, or raises `KeyError` (404). Replace a hand-written duplicate check and no-op `UPDATE`.
 - Tests: the plugin is registered with every install and does nothing until the extra is installed and the project has `[tool.strata-db]` (or `strata_db = true` in `[tool.pytest.ini_options]`; `strata_db = false` turns it off). So an app can take a 0.2.x release before it moves its database, even with the old database package still installed. Then `db_session`, `db_engine`, `db_url` (a URL for code that builds its own engine), `db_env` (points the app's own `connect("myapp")` at the test database; make it autouse in `conftest.py` for an app that connects by itself), `db_backend`, `db_project`. Migrations run once into a template and each test gets a copy, so a test costs a file copy. `pytest --pg` (or `--strata-pg`, which no other plugin can take) runs the same tests on a private Postgres the run starts for itself (needs the PostgreSQL server binaries), or on `STRATA_DB_TEST_ADMIN_URL`. Add the standard tests once:
 
   ```python
