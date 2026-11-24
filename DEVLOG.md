@@ -2,6 +2,14 @@
 
 Why each change was made and which files it touched, newest day first. For what changed in each release, as an app sees it, read [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-24
+
+**The publish workflow installs ffmpeg (branch `claude/project-thread-42bdk4`)**
+
+v0.2.11 was tagged and released on GitHub but not uploaded: `pypi-publish.yml` runs `strata-check` on the tag, and with no ffmpeg on its runner the `media` and `derive` tests skip, which put unit coverage under the 95% floor. `ci.yml` installs ffmpeg and sets `STRATA_TEST_FFMPEG=1`; the publish job now does the same. v0.2.11 then needs publishing by hand (the workflow's `tag` input), since the tag's own run has failed.
+
+- `.github/workflows/pypi-publish.yml`: an ffmpeg step and `STRATA_TEST_FFMPEG=1`.
+
 ## 2026-11-23
 
 **Main's CI red on a Ticker test; `derive` listed under the wrong release (branch `claude/project-thread-42bdk4`)**
