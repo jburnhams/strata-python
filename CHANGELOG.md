@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.18 (2026-11-24)
+
 ### Fixed
 
 - `derive.frames` with more than 100 frames on ffmpeg 9, which refuses an expression nested that deep ("Cannot allocate memory"): the frames are now picked by sums of 20 terms added up. The pictures, their names and `RECIPE` are the same.
