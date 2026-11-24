@@ -372,14 +372,10 @@ class Pipeline:
             st = self._state(s, records, inputs, states)
             if st in ("ready", "stale", "failed", "waiting") and stopping():
                 stopped = True
-            elif st == "waiting" and s.auto is not None:
-                key = self.key(s, inputs, records)
-                assert key is not None  # noqa: S101 - a waiting gate's needs are done
-                if s.auto(self._context(s, subject, inputs, key, records, app)):
-                    rec = Record(s.name, DONE, key, at=self.clock(), by="auto")
-                    store.save(subject, rec)
-                    records[s.name] = rec
-                    st = "done"
+            elif s.gate:
+                if st in ("waiting", "failed") and s.auto is not None:
+                    st, error = self._auto(s, store, subject, inputs, records, app)
+                    first = first or error
             elif st in ("ready", "stale", "failed"):
                 st, error = self._run(s, store, subject, inputs, records, app)
                 first = first or error
@@ -393,6 +389,34 @@ class Pipeline:
         self, s: Stage, subject: str, inputs: Mapping[str, Any], key: str, records: Mapping[str, Record], app: Any
     ) -> Context:
         return Context(self, s, subject, inputs, key, records, app)
+
+    def _auto(
+        self,
+        s: Stage,
+        store: Store,
+        subject: str,
+        inputs: Mapping[str, Any],
+        records: dict[str, Record],
+        app: Any,
+    ) -> tuple[StageState, Exception | None]:
+        """Ask a gate's policy. A policy that raises is a failed gate (asked again on the next call), as a stage that
+        raises is a failed stage: recorded, the stages that do not need it still run, then raised."""
+        key = self.key(s, inputs, records)
+        assert key is not None  # noqa: S101 - a waiting gate's needs are done
+        assert s.auto is not None  # noqa: S101 - only a gate with a policy is asked
+        try:
+            approved = s.auto(self._context(s, subject, inputs, key, records, app))
+        except Exception as e:  # raised by advance once the stages that do not need it have run
+            rec = Record(s.name, FAILED, key, error=f"{type(e).__name__}: {e}", at=self.clock())
+            store.save(subject, rec)
+            records[s.name] = rec
+            return "failed", e
+        if not approved:
+            return "waiting", None
+        rec = Record(s.name, DONE, key, at=self.clock(), by="auto")
+        store.save(subject, rec)
+        records[s.name] = rec
+        return "done", None
 
     def _run(
         self,

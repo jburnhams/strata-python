@@ -32,7 +32,7 @@ What they share is here; what each stage does stays in the app.
 
     out = INGEST.advance(store, "book:12", {"files": fingerprint, "providers": ["audible"]}, app=book)
     out.state          # "done", "waiting" (on a gate: out.waiting), "failed", "blocked" or "stopped"
-    INGEST.approve(store, "book:12", "book", inputs, by="jonathan")   # then advance again (or enqueue it)
+    INGEST.approve(store, "book:12", "book", inputs, by="ada")   # then advance again (or enqueue it)
     INGEST.clear(store, "book:12", "metadata")                        # it and everything after it run again
 
 The key of a stage is `request_key(pipeline, stage, version, its keys from the inputs, the digest of each need's

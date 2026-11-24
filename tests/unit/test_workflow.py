@@ -376,3 +376,36 @@ def test_an_answer_json_cannot_hold_is_compared_by_its_key():
     assert r.digest == Record("a", DONE, "k", Picture([2])).digest
     assert r.digest != Record("a", DONE, "other", Picture([1])).digest
     assert r.digest != Record("a", DONE, "k", None).digest
+
+
+def test_a_policy_that_raises_is_a_failed_gate_and_the_rest_still_run():
+    calls, store = Calls(), MemoryStore()
+    broken = {"on": True}
+
+    def policy(ctx: Context) -> bool:
+        if broken["on"]:
+            raise OSError("the policy file is not there")
+        return True
+
+    p = Pipeline(
+        "p",
+        [
+            step("a", calls("a")),
+            gate("g", needs=("a",), auto=policy),
+            step("b", calls("b"), needs=("g",)),
+            step("c", calls("c"), needs=("a",)),
+        ],
+    )
+    out = p.advance(store, "s", {}, raise_errors=False)
+    assert (out.state, out.failed, out.states["b"], calls.runs) == ("failed", ["g"], "blocked", ["a", "c"])
+    assert store.load("s")["g"].error == "OSError: the policy file is not there"
+    with pytest.raises(OSError, match="policy file"):
+        p.advance(store, "s", {})
+    broken["on"] = False
+    out = p.advance(store, "s", {})  # asked again, and approves
+    assert (out.state, out.records["g"].by, calls.runs) == ("done", "auto", ["a", "c", "b"])
+    q = Pipeline("q", [step("a", calls("a")), gate("g", needs=("a",), auto=policy)])
+    broken["on"] = True
+    q.advance(store, "t", {}, raise_errors=False)
+    q.approve(store, "t", "g", {}, by="ada")  # a person can approve a gate whose policy failed
+    assert q.status(store, "t", {}).state == "done"
