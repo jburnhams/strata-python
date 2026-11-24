@@ -4,6 +4,11 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `strata_python.speech`: a library of spoken clips (issue #73). `ClipStore(root)` keeps each line's WAV, named by its content, with its source (`generated` or `recorded`), voice, model and settings hash; `build(store, lines, app=, voice=, params=, per_line=, now=, force=)` makes the missing clips with strata-models' `speak` role and remakes one whose voice, model or settings changed, never a person's recording, reporting each line that fails (`Built`); `add_clip_routes(app, store, prefix, recordable=)` serves the clip list (`ClipsOut`), the clips with an immutable cache header, and a person's recordings (`PUT`/`DELETE {prefix}/recordings?line=`, `ClipOut`). Replace an app's own clip store, build loop and voice routes with these.
+- `strata_python.db.insert_once(db, Model, id, make, same=)` and `lock_row(db, Model, id)` (`strata_python.db.writes`): the server half of strata-react's `createOutbox` (issue #74). A write is taken once by its client-made id: a retry with the same contents gets the stored row back as a duplicate, writing nothing and never running `make`; other contents raise `ConflictingWrite`, a 409. `lock_row` serialises writes per parent row on Postgres and SQLite alike and returns the row read under the lock. Replace a hand-written duplicate check and no-op `UPDATE`.
+
 ## 0.2.16 (2026-11-24)
 
 ### Added
