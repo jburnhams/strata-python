@@ -38,6 +38,7 @@ Prefer real code over mocks. A test that runs the real thing finds the bugs that
 ```
 src/strata_python/   oslib, settings, web, cli, contracts, client, files, http, media, derive, mediatime, wav, images (the [images] extra), stats, http_server, live, testing, pytest_plugin, check, public_check; py.typed
   tasks/             retry, progress, flight (SingleFlight), status (StatusFile, Detached), ticker; queue and child (the [db] extra: a job per process)
+  workflow/          pipeline (stages, gates, keys, MemoryStore) and machine (StateMachine); store (the [db] extra: DbStore, enqueue, move)
   clients/           one typed, standard-library-only client per strata service: models (strata-models)
   db/                the [db] extra: config, guard, engine, models, project, migrations, scratch, settings, testserver, testing, web (FastAPI), cli, pytest_plugin, _alembic/
   pages/             model (the page description, plain data) and render (the [pdf] extra: ReportLab writes, pdfium reads back)

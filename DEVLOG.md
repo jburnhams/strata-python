@@ -4,6 +4,20 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-24
 
+**`workflow`: stages, gates and state machines the apps had each built (branch `claude/project-thread-daa05w`)**
+
+Asked to find what strata-listory, strata-stills and strata-reels share in their workflow, pipeline and state-machine code and to make one module they could all adopt. Read listory's ingest (`ingest/pipeline.py`, `ingest/store.py`: eleven stages, append-only events with metrics and data, resume, three review gates whose approval is bound to a signature of the evidence and can be given by policy) and its processing plan (`catalogue.PLAN_STATES`, `claim_plan`'s conditional UPDATE); stills' develop pipeline (`pipeline.py`: ordered stages with settings and versions, a key of all of them that finds a picture already made, timing per stage, rules that list what is missing); reels' `jobs.py`/`derived.py`/`results.py` (hash, then three assets keyed on the hash, the recipe's version and the parameters, each job queueing the next). reels' overview names strata-360's stage runner as the one to generalise "if it generalises cleanly", so that was read too (`pipeline/stages.py`, `runner.py`: stage version, config keys and dependencies in the key, `clear` with dependents, a state matrix) and is the model here. What differs per app (what a stage does, where heavy files go, stills' in-memory picture between stages) stays in the app.
+
+Decisions: a need's answer enters its dependents' keys with its key (not the answer alone), so a stage that writes files and returns little cannot leave the stages after it on old files; a stage whose need is not done is `blocked`, never run, even if its own record still matches; one queue job advances one subject through every stage it can, rather than a job per stage, because every reels job holds `disk` (they ran one at a time anyway) and listory ran its stages in one process; a failed stage lets the stages that do not need it run (strata-360's fail-soft) and then raises, so the queue's backoff and programming-error rules apply unchanged. Standard library apart from `workflow.store`, which uses the db extra as `tasks.queue` does.
+
+- `src/strata_python/workflow/__init__.py` **new**: the package's exports and where each rule came from.
+- `src/strata_python/workflow/pipeline.py` **new**: `Stage`, `step`, `gate`, `Context`, `Record`, `Store`, `MemoryStore`, `Outcome`, `Pipeline` (`key`, `states`, `advance`, `approve`, `clear`, `status`, `dependents`, `upto`), `request_key`.
+- `src/strata_python/workflow/machine.py` **new**: `StateMachine`, `InvalidTransition`.
+- `src/strata_python/workflow/store.py` **new**: `workflow_table`, `DbStore`, `enqueue`, `move`.
+- `tests/unit/test_workflow.py` **new**: keys, resume, fail-soft, gates (by hand and by policy), out-of-date approvals, clears, states, stopping, progress, the machine.
+- `tests/unit/test_workflow_store.py` **new**: the store, a queue job advancing a subject and `move`, on SQLite and Postgres.
+- `README.md`, `CHANGELOG.md`, `AGENTS.md`: the module row, the 6b migration note, the Unreleased line, the layout.
+
 **`media.configure`: the app's own setting says where ffmpeg and ffprobe are (#60, branch `claude/project-thread-wov55p`)**
 
 Tubes declares `ffmpeg` on its `Settings` and its doctor checks that path, but `media` only read `STRATA_FFMPEG` and the PATH, so Tubes kept its own `subprocess` call and the setting and the variable could name two programs. The issue offered an `exe=` keyword or a resolver set once; the resolver was chosen, because every call site (including `derive`, which calls `media` itself) would otherwise have to pass it.
