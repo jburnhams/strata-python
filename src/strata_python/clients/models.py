@@ -13,7 +13,8 @@ One shortcut per role the service runs (`ROLES`), each with its result shape:
     faces            Faces            face_kind        FaceKinds        ocr              OcrPage
     transcribe(-fast) Transcript      speak            Speech           denoise_audio    CleanAudio
     audio_quality    AudioQuality     generate_image   GeneratedImage   embed            Embeddings
-    enhance_video    EnhancedVideo    ask (vision-language, text, judge-text, judge-vision, judge-audio)  Answer
+    enhance_video    EnhancedVideo    shot_boundaries  Shots
+    ask (vision-language, text, judge-text, judge-vision, judge-audio)  Answer
 
 The service URL is STRATA_MODELS_URL (default http://127.0.0.1:8366). Inputs are file paths: the service runs on the
 same machine. strata-models tests this module against its real API in its own integration suite; this repo tests it
@@ -190,6 +191,7 @@ ROLES = (
     "image-generate",
     "image-embed",
     "video-enhance",
+    "shot-boundaries",
     "vision-language",
     "text",
     "judge-text",
@@ -365,6 +367,17 @@ def enhance_video(path: str, app: str, priority: Priority = "normal", model: str
     `run` instead when the app must not wait that long."""
     params["path"] = os.path.abspath(path)
     return run("video-enhance", params, app, priority=priority, model=model)
+
+
+def shot_boundaries(
+    path: str, app: str, priority: Priority = "normal", model: str | None = None, **params: Any
+) -> Json:
+    """Where a video cuts from one shot to the next, and its black stretches (role `shot-boundaries`,
+    `Shots.from_json`): params clip [start, end] seconds, threshold, min_shot_s, width, deinterlace, black (default
+    true), black_min_s, black_pixel, scores (every frame's score too: a long list). A tape takes minutes on the CPU:
+    give `timeout` to `run` instead when the app must not wait that long."""
+    params["path"] = os.path.abspath(path)
+    return run("shot-boundaries", params, app, priority=priority, model=model)
 
 
 def role_model(role: str) -> str | None:
@@ -834,4 +847,52 @@ class EnhancedVideo:
         return cls(
             str(d["path"]), int(d["width"]), int(d["height"]), _opt_float(d, "fps"), _opt_int(d, "frames"), crops,
             stills, quality, _opt_str(d, "engine"), _opt_str(d, "model"), _opt_float(d, "seconds"), d,
+        )  # fmt: skip
+
+
+@dataclass(frozen=True)
+class Cut:
+    time: float  # seconds in the file: the first frame of the new shot
+    frame: int  # that frame, counted from the first frame looked at (from 0)
+    score: float  # how unlike the frame before it is, 0 to 1
+
+
+@dataclass(frozen=True)
+class Stretch:
+    start: float
+    end: float
+
+
+@dataclass(frozen=True)
+class Shots:
+    """Role `shot-boundaries`: the cuts, the shots they make (end to end over the part looked at) and the stretches
+    of black, with the frame rate and frame count read, and the threshold and minimum shot length it ran with.
+    `scores` is every frame's score when it was asked for, else empty."""
+
+    cuts: list[Cut]
+    shots: list[Stretch]
+    black: list[Stretch]
+    fps: float | None
+    frames: int | None
+    duration: float | None
+    threshold: float | None = None
+    min_shot_s: float | None = None
+    scores: list[float] = field(default_factory=lambda: [])
+    engine: str | None = None
+    model: str | None = None
+    seconds: float | None = None
+    raw: Json = field(default_factory=lambda: {}, repr=False, compare=False)
+
+    @classmethod
+    def from_json(cls, d: Json) -> Shots:
+        def stretches(key: str) -> list[Stretch]:
+            return [Stretch(float(x["start"]), float(x["end"])) for x in cast("list[Json]", d.get(key) or [])]
+
+        cuts = [
+            Cut(float(c["time"]), int(c["frame"]), float(c["score"])) for c in cast("list[Json]", d.get("cuts") or [])
+        ]
+        return cls(
+            cuts, stretches("shots"), stretches("black"), _opt_float(d, "fps"), _opt_int(d, "frames"),
+            _opt_float(d, "duration"), _opt_float(d, "threshold"), _opt_float(d, "min_shot_s"), _floats(d.get("scores") or []),
+            _opt_str(d, "engine"), _opt_str(d, "model"), _opt_float(d, "seconds"), d,
         )  # fmt: skip

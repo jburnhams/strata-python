@@ -299,6 +299,12 @@ MODELS_RESULTS: dict[str, Json] = {
         "crops": [{"id": "face", "label": "Gran", "box": [100, 50, 80, 80], "path": "/out/v-face.mp4", "stills": ["/out/v-face-3.png"]}],
         "stills": ["/out/v-1.png"], "enhance_s": 40.0, "quality": {"ssim": 0.91, "skipped": "no numpy"},
     },
+    "shot-boundaries": {
+        "cuts": [{"time": 4.0, "frame": 100, "score": 0.82}, {"time": 9.36, "frame": 234, "score": 0.41}],
+        "shots": [{"start": 0.0, "end": 4.0}, {"start": 4.0, "end": 9.36}, {"start": 9.36, "end": 12.0}],
+        "black": [{"start": 3.6, "end": 4.0}], "fps": 25.0, "frames": 300, "duration": 12.0, "threshold": 0.3,
+        "min_shot_s": 0.6, "width": 160, "deinterlace": True, "engine": "ffmpeg 7.1", "seconds": 0.4, "model": "ffmpeg-scene-score",
+    },
 }  # fmt: skip
 """One reply per role in the service's own shapes (taken from its runtimes), so `Shape.from_json` reads each one."""
 for _role in ("transcribe-fast",):
