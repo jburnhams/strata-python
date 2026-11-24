@@ -26,6 +26,17 @@ He also asked how this sits with the job queue, which overlaps, and for common e
 - `tests/unit/test_workflow_store.py` **new**: the store, a queue job advancing a subject and `move`, on SQLite and Postgres.
 - `README.md`, `CHANGELOG.md`, `AGENTS.md`: the module row, the 6b migration note, the Unreleased line, the layout.
 
+**`wav.measure` and `wer` for scoring recorded takes (branch `claude/project-thread-cvjjmf`)**
+
+strata-voice's step 2 scores each take of a prompt (clipping, level, noise floor, and the word error rate of its transcript against the prompt). The owner wants shared audio code in the libraries, and strata-models' transcription evals compute the same word error rate, so both live here.
+
+- `src/strata_python/wav.py`: `measure` and `WavLevels`. Standard library only: `array` holds the samples and `map(operator.mul, w, w)` squares a window in C, about 0.2 s for a minute at 48 kHz, so no numpy for an app that only judges takes. 24-bit is widened by slicing the bytes into the top three of four (scaled by 256, sign kept). Noise is the 10th percentile and speech the 95th of 20 ms window RMS, so pauses are the floor and one cough is not the voice. A sample within 0.1 % of full scale counts as clipped; the count is skipped when the peak is below that, the usual case.
+- `src/strata_python/wer.py` (**new**): `normalise` (the same rules as strata-models' eval metrics, so the numbers compare) and `word_errors`, a Levenshtein alignment that keeps its edits, so an app can name the words missed rather than give a bare rate.
+- `src/strata_python/testing.py`: `sine_wav` takes `lead`, `tail` and a seeded `noise`, and clamps above full scale, so tests can make a take with pauses, a room and clipping.
+- Review (Codex on #65): `measure` refuses a header with a sample rate of 0 as a `WavError` (it divided by it); `normalise` drops characters by Unicode category instead of `[^\w]`, which split Devanagari words at their combining vowel signs and scored different words as equal.
+- `tests/unit/test_wav.py`, `tests/unit/test_wer.py` (**new**): levels of a known tone, clipping, 24-bit, silence, refusals; each kind of edit.
+- `README.md`, `AGENTS.md`, `CHANGELOG.md`: the new names.
+
 **`media.configure`: the app's own setting says where ffmpeg and ffprobe are (#60, branch `claude/project-thread-wov55p`)**
 
 Tubes declares `ffmpeg` on its `Settings` and its doctor checks that path, but `media` only read `STRATA_FFMPEG` and the PATH, so Tubes kept its own `subprocess` call and the setting and the variable could name two programs. The issue offered an `exe=` keyword or a resolver set once; the resolver was chosen, because every call site (including `derive`, which calls `media` itself) would otherwise have to pass it.
