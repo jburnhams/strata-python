@@ -266,6 +266,16 @@ def test_frames_in_several_runs_and_past_the_end(clips, tmp_path, monkeypatch):
     assert derive.frames(clips["silent"], tmp_path / "none", []) == []
 
 
+@needs_ffmpeg
+def test_more_frames_than_ffmpeg_will_nest(tmp_path):
+    # ffmpeg 9 refused the 101st term of a plain sum ("Cannot allocate memory"): a tape of over 100 shots had no keyframes
+    clip = _make(
+        tmp_path / "long.mkv", "-f", "lavfi", "-i", "testsrc=size=64x48:rate=25:duration=20", "-c:v", "ffv1",
+    )  # fmt: skip
+    got = derive.frames(clip, tmp_path / "keys", range(derive.FRAMES_PER_RUN + 1), height=48, interlace="progressive")
+    assert len(got) == len(os.listdir(tmp_path / "keys")) == derive.FRAMES_PER_RUN + 1
+
+
 def test_frames_are_counted_from_zero(tmp_path):
     with pytest.raises(ValueError, match="counted from 0"):
         derive.frames(tmp_path / "x.mkv", tmp_path / "k", [-1, 3])

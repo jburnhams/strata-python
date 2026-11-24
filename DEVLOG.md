@@ -4,6 +4,13 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-24
 
+**`derive.frames` past 100 frames on ffmpeg 9 (branch `derive-frames-many`)**
+
+Found by strata-reels on a real 21-minute tape on omarchy (ffmpeg 9.0.2), once it asked for a keyframe every six seconds: 209 frames, and ffmpeg stopped with "Cannot allocate memory" while setting up `select`. A plain `eq(n,a)+eq(n,b)+...` parses into a tree as deep as it has terms, and ffmpeg 9 refuses a depth over 100 (100 terms pass, 101 fail, 400 in sums of 20 pass). Any tape with over 100 shots would have had no keyframes. `FRAMES_PER_RUN` stays 400, so a tape is still decoded once or twice.
+
+- `src/strata_python/derive.py`: `TERMS_PER_SUM`, `_pick`, used by `frames`.
+- `tests/unit/test_derive.py`: 401 frames of a real clip (the one test fails on ffmpeg 9 without the change).
+
 **Spoken clips and the outbox's server half, from Flashtap (branch `claude/project-thread-5rvxef`, issues #73 and #74)**
 
 Asked to fix the open issues. Both were raised from Flashtap, which built each by hand: its voice (`voice.py` `Store` and `build`, `server/app.py` `add_voice_routes`) and its answer log (`learners/store.py` `record`, `_same`, `hold`). Read both and kept their rules: a made clip never replaces a recording, decided under the manifest's lock so a recording taken while `build` runs stands; a duplicate is found before the app does its own work on a write, and compared with what the client sent, not with a row rebuilt now.

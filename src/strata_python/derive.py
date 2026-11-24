@@ -217,6 +217,17 @@ class Frame:
 #: 32,767.
 FRAMES_PER_RUN = 400
 
+#: ffmpeg 9 refuses an expression nested over 100 deep, and a plain sum of n terms is n deep. Sums of this many terms,
+#: added up, are 20 + 20 deep for a whole run.
+TERMS_PER_SUM = 20
+
+
+def _pick(numbers: Sequence[int]) -> str:
+    """The `select` filter that keeps the frames with these numbers."""
+    terms = [f"eq(n\\,{n})" for n in numbers]
+    sums = ["+".join(terms[i : i + TERMS_PER_SUM]) for i in range(0, len(terms), TERMS_PER_SUM)]
+    return "select='" + "+".join(f"({s})" for s in sums) + "'"
+
 
 def frames(
     src: str | os.PathLike[str],
@@ -246,9 +257,8 @@ def frames(
     try:
         for i in range(0, len(wanted), FRAMES_PER_RUN):
             run = wanted[i : i + FRAMES_PER_RUN]
-            pick = "select='" + "+".join(f"eq(n\\,{n})" for n in run) + "'"
             # deinterlaced before the pick, as the deinterlacer reads the frames either side
-            vf = ",".join([*_deinterlace(fields), pick, _scale(height)])
+            vf = ",".join([*_deinterlace(fields), _pick(run), _scale(height)])
             staged = os.path.join(part, f"run{i // FRAMES_PER_RUN}")
             os.mkdir(staged)
             media.ffmpeg(
