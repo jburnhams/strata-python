@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,6 +44,7 @@ RECORDING = "recording"  # the voice of a recorded clip
 MAX_RECORDING_S = 10.0  # a line, not a speech: longer is a recording left running
 MAX_RECORDING_BYTES = 4_000_000  # 10 s of 16-bit mono at 192 kHz; refused while it streams in, before it is read
 IMMUTABLE = "public, max-age=31536000, immutable"
+CLIP_NAME = re.compile(r"[0-9a-f]{16}\.wav")  # what `put` names a file, and the only names `path_of` serves
 
 
 class Clip(BaseModel):
@@ -88,10 +90,14 @@ class ClipStore:
         return self.read().clips.get(line)
 
     def path_of(self, name: str) -> Path | None:
-        """The file of a clip by its served name, or None for any name the manifest does not hold: a name from a
-        request never reaches the file system, so `../` gets nowhere."""
-        held = {c.name: c.file for c in self.read().clips.values()}
-        return self.root / held[name] if name in held else None
+        """The file of a clip by its served name (`<hash>.wav`), or None. Any clip file the store ever wrote is
+        served, not only the manifest's current ones, so a URL a browser listed before its line was remade or recorded
+        over still plays (the file stays; a new clip is a new name). A name that is not exactly a content hash is
+        refused before it reaches the file system, so `../` gets nowhere."""
+        if not CLIP_NAME.fullmatch(name):
+            return None
+        path = self.root / "clips" / name
+        return path if path.is_file() else None
 
     def urls(self, prefix: str) -> dict[str, str]:
         """Line -> the clip's URL under `add_clip_routes`' `prefix`, relative (no leading `/`) so the web app puts its

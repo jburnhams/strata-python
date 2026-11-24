@@ -197,6 +197,8 @@ def test_routes_list_serve_record_and_forget(served: tuple[TestClient, ClipStore
     assert got.headers["cache-control"] == "public, max-age=31536000, immutable"
     assert got.content == sine_wav(0.5, rate=SPEECH_RATE)
     assert client.get("/api/v1/voice/clips/nothing.wav").status_code == 404
+    assert client.get("/api/v1/voice/clips/0123456789abcdef.wav").status_code == 404  # a hash never written
+    assert client.get("/api/v1/voice/clips/..%2Fmanifest.json").status_code == 404
 
     take = sine_wav(0.4, rate=SPEECH_RATE, hz=330)
     put = client.put("/api/v1/voice/recordings", params={"line": "/m/"}, content=take)
@@ -204,6 +206,10 @@ def test_routes_list_serve_record_and_forget(served: tuple[TestClient, ClipStore
     body = put.json()
     assert (body["line"], body["source"], body["seconds"]) == ("/m/", "recorded", 0.4)
     assert client.get("/" + body["url"]).content == take
+    replaced = client.get("/" + listed["Hi."])  # remade since it was listed: the old URL still plays
+    store.put("Hi.", sine_wav(0.6, rate=SPEECH_RATE), source="generated", voice="v")
+    assert client.get("/api/v1/voice").json()["clips"]["Hi."] != listed["Hi."]
+    assert client.get("/" + listed["Hi."]).content == replaced.content
     assert client.delete("/api/v1/voice/recordings", params={"line": "/m/"}).status_code == 204
     assert client.delete("/api/v1/voice/recordings", params={"line": "/m/"}).status_code == 404
     assert client.delete("/api/v1/voice/recordings", params={"line": "/x/"}).status_code == 404  # never recorded
