@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.20 (2026-11-25)
+
 ### Added
 
 - `strata_python.db.vectors`: `Vector(dim)`, an embedding column that is pgvector's `vector(dim)` on Postgres and JSON text on SQLite (no `pgvector` package needed), `hnsw_index(name, column)` for cosine search, and `nearest(db, Model.vector, query, k=, where=, select=, max_distance=)`, the closest rows with their cosine distance, ordered by `<=>` in Postgres and in Python on SQLite, so unit tests can hold and search embeddings. Replace a `pgvector.sqlalchemy.Vector` column and a hand-written `<=>` query with these.
