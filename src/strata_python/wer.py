@@ -13,12 +13,20 @@ punctuation, symbols and hyphens out (apostrophes inside a word kept, so "don't"
 so a vowel sign stays part of its word), whitespace collapsed. Number
 words are not unified: "ten" against "10" counts as an error, which a caller that writes prompts can avoid by
 spelling numbers out. The alignment is the plain Levenshtein one (each substitution, deletion and insertion costs 1),
-computed in O(said x heard), which is nothing for a sentence and fine for a paragraph."""
+computed in O(said x heard), which is nothing for a sentence and fine for a paragraph.
+
+When the recording holds more than the text (a false start, "sorry, again", a word to someone in the room), `find`
+says which run of the heard words is the text: the run that aligns with fewest errors, the latest one on a tie, so a
+restarted sentence keeps its last full reading. A studio crops a take to that run's word timings.
+
+    found = find("The quick brown fox.", ["The", "quick,", "sorry.", "The", "quick", "brown", "fox."])
+    (found.start, found.end, found.errors.wer)        # (3, 7, 0.0): heard[3:7] is the reading"""
 
 from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -100,3 +108,57 @@ def word_errors(said: str, heard: str) -> WordErrors:
             edits.append(Edit("insert", None, b[j - 1]))
             j -= 1
     return WordErrors(a, b, edits[::-1])
+
+
+@dataclass(frozen=True)
+class Found:
+    """Where the text meant was said inside a longer transcript: `heard[start:end]` of the words given to `find`, and
+    its alignment with the text. `start == end` when not one word matched."""
+
+    start: int
+    end: int
+    errors: WordErrors
+
+
+def find(said: str, heard: Sequence[str]) -> Found:
+    """The run of `heard` (a transcript's words in order, as a recogniser gives them with their timings) that is
+    `said`: a fitting alignment, where words heard before and after the run cost nothing. Fewest errors wins; on a tie
+    the run that ends later, then the one that starts later, so a restarted sentence keeps its last full reading."""
+    a = normalise(said)
+    # Each heard word may normalise to none or several words ("well-known"); each keeps the index of its source.
+    b: list[str] = []
+    source: list[int] = []
+    for n, w in enumerate(heard):
+        for part in normalise(w):
+            b.append(part)
+            source.append(n)
+    # A run starts and ends between heard words, never inside one that normalised to several: the span scored must be
+    # the span returned, or "well-known" could be matched as "known" and then handed back whole.
+    edge = [j == 0 or j == len(b) or source[j] != source[j - 1] for j in range(len(b) + 1)]
+    far = len(a) + len(b) + 1  # more than any real alignment costs: a start inside a word is never chosen
+    # cost[i][j]: fewest edits aligning the first i words of a to a run of b that ends at j; first[i][j]: where that
+    # run starts. Row 0 is free at every word edge: the run may start before any heard word.
+    cost = [[0 if edge[j] else far for j in range(len(b) + 1)]]
+    first = [list(range(len(b) + 1))]
+    for i, word in enumerate(a, 1):
+        prev, pfirst = cost[-1], first[-1]
+        row, rfirst = [i], [0]
+        for j, other in enumerate(b, 1):
+            # Ties go to the later start: a substitution or match, then a skipped word meant, then an extra word heard.
+            options = [
+                (prev[j - 1] + (word != other), pfirst[j - 1]),
+                (prev[j] + 1, pfirst[j]),
+                (row[j - 1] + 1, rfirst[j - 1]),
+            ]
+            best = min(c for c, _ in options)
+            row.append(best)
+            rfirst.append(max(f for c, f in options if c == best))
+        cost.append(row)
+        first.append(rfirst)
+    last = cost[-1]
+    end = max((j for j in range(len(b) + 1) if edge[j]), key=lambda j: (-last[j], j, first[-1][j]))
+    start = first[-1][end]
+    if start == end:
+        return Found(0, 0, word_errors(said, ""))
+    lo, hi = source[start], source[end - 1] + 1
+    return Found(lo, hi, word_errors(said, " ".join(heard[lo:hi])))
