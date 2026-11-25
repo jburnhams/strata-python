@@ -10,6 +10,7 @@ strata-voice's hands-free studio cuts takes out of an always-open microphone, so
 
 - `src/strata_python/wer.py`: `find` and `Found`. It uses a fitting alignment, which is Levenshtein with free words heard before and after the run. Ties go to the later end and then the later start, so "the quick, sorry, the quick brown fox" keeps the second reading. Heard words are taken one by one, as a recogniser gives them with timings. Each keeps its index through `normalise`, so a word that splits ("well-known") or vanishes ("—") still maps back to its timing.
 - `tests/unit/test_wer.py`: 3 tests (a restart, chatter, two full readings, a misreading inside chatter, split and empty words, nothing heard).
+- Review (Codex): a run could start or end inside a heard word that normalised to several, then be handed back whole, so `find("known", ["known", "well-known"])` chose the second word with an error. Runs now start and end only between heard words.
 
 ## 2026-11-24
 

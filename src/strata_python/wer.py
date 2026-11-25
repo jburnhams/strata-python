@@ -132,9 +132,13 @@ def find(said: str, heard: Sequence[str]) -> Found:
         for part in normalise(w):
             b.append(part)
             source.append(n)
+    # A run starts and ends between heard words, never inside one that normalised to several: the span scored must be
+    # the span returned, or "well-known" could be matched as "known" and then handed back whole.
+    edge = [j == 0 or j == len(b) or source[j] != source[j - 1] for j in range(len(b) + 1)]
+    far = len(a) + len(b) + 1  # more than any real alignment costs: a start inside a word is never chosen
     # cost[i][j]: fewest edits aligning the first i words of a to a run of b that ends at j; first[i][j]: where that
-    # run starts. Row 0 is free at every j: the run may start anywhere.
-    cost = [[0] * (len(b) + 1)]
+    # run starts. Row 0 is free at every word edge: the run may start before any heard word.
+    cost = [[0 if edge[j] else far for j in range(len(b) + 1)]]
     first = [list(range(len(b) + 1))]
     for i, word in enumerate(a, 1):
         prev, pfirst = cost[-1], first[-1]
@@ -152,7 +156,7 @@ def find(said: str, heard: Sequence[str]) -> Found:
         cost.append(row)
         first.append(rfirst)
     last = cost[-1]
-    end = max(range(len(b) + 1), key=lambda j: (-last[j], j, first[-1][j]))
+    end = max((j for j in range(len(b) + 1) if edge[j]), key=lambda j: (-last[j], j, first[-1][j]))
     start = first[-1][end]
     if start == end:
         return Found(0, 0, word_errors(said, ""))

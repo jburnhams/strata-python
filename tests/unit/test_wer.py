@@ -64,6 +64,9 @@ def test_finds_a_misreading_and_keeps_its_errors() -> None:
     # A heard word that normalises to two maps back to its source, and one that is only punctuation to none.
     split = find("a well known song", ["—", "a", "well-known", "song"])
     assert (split.start, split.end, split.errors.wer) == (1, 4, 0.0)
+    # A run never starts inside a heard word: "known" alone is the first word, not the end of "well-known".
+    inside = find("known", ["known", "well-known"])
+    assert (inside.start, inside.end, inside.errors.wer) == (0, 1, 0.0)
 
 
 def test_finds_nothing_in_an_empty_or_unrelated_transcript() -> None:
