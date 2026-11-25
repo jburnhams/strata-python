@@ -2,6 +2,15 @@
 
 Why each change was made and which files it touched, newest day first. For what changed in each release, as an app sees it, read [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-25
+
+**`wer.find`: the prompt inside a longer take (branch `claude/project-thread-cvjjmf`)**
+
+strata-voice's hands-free studio cuts takes out of an always-open microphone, so a take can hold a false start or a word to someone else before or after the prompt. The owner asked for a quick way to "extract the relevant bit for the prompt". Finding a known text inside a transcript is the same word alignment `word_errors` does, so it lives beside it.
+
+- `src/strata_python/wer.py`: `find` and `Found`. It uses a fitting alignment, which is Levenshtein with free words heard before and after the run. Ties go to the later end and then the later start, so "the quick, sorry, the quick brown fox" keeps the second reading. Heard words are taken one by one, as a recogniser gives them with timings. Each keeps its index through `normalise`, so a word that splits ("well-known") or vanishes ("—") still maps back to its timing.
+- `tests/unit/test_wer.py`: 3 tests (a restart, chatter, two full readings, a misreading inside chatter, split and empty words, nothing heard).
+
 ## 2026-11-24
 
 **`derive.frames` past 100 frames on ffmpeg 9 (branch `derive-frames-many`)**

@@ -1,6 +1,6 @@
 import pytest
 
-from strata_python.wer import Edit, normalise, word_errors
+from strata_python.wer import Edit, find, normalise, word_errors
 
 
 def test_normalises_case_punctuation_and_apostrophes() -> None:
@@ -46,3 +46,29 @@ def test_nothing_said_or_heard() -> None:
     assert word_errors("", "um").wer == 1.0
     assert word_errors("hello there", "").missed == ["hello", "there"]
     assert word_errors("one", "one two three four").wer == 3.0  # more heard than meant passes 1
+
+
+def test_finds_the_reading_inside_a_longer_transcript() -> None:
+    restart = find("The quick brown fox.", ["The", "quick,", "sorry.", "The", "quick", "brown", "fox."])
+    assert (restart.start, restart.end, restart.errors.wer) == (3, 7, 0.0)
+    chatter = find("Hello there.", ["okay", "hello", "there", "right", "next", "one"])
+    assert (chatter.start, chatter.end) == (1, 3)
+    # Twice read in full: the later reading.
+    assert (find("a cat", ["a", "cat", "a", "cat"]).start, find("a cat", ["a", "cat", "a", "cat"]).end) == (2, 4)
+
+
+def test_finds_a_misreading_and_keeps_its_errors() -> None:
+    found = find("The quick brown fox", ["um", "the", "quick", "red", "fox", "thanks"])
+    assert (found.start, found.end) == (1, 5)
+    assert found.errors.missed == ["brown"]
+    # A heard word that normalises to two maps back to its source, and one that is only punctuation to none.
+    split = find("a well known song", ["—", "a", "well-known", "song"])
+    assert (split.start, split.end, split.errors.wer) == (1, 4, 0.0)
+
+
+def test_finds_nothing_in_an_empty_or_unrelated_transcript() -> None:
+    nothing = find("Hello there", [])
+    assert (nothing.start, nothing.end, nothing.errors.wer) == (0, 0, 1.0)
+    unrelated = find("Hello there", ["completely", "different"])
+    assert unrelated.errors.wer == 1.0
+    assert find("", ["anything"]).start == find("", ["anything"]).end
