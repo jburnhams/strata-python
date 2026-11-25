@@ -12,6 +12,13 @@ The owner asked strata-models to stop holding Claude jobs for a possible batch (
 - `src/strata_python/testing.py`: `FakeModels` has the bulk endpoint, refuses a normal or low single job (400, as the service), and a poll without `?wait=` no longer moves a job on (the real service only reads it; `submit` now reads the row back, which made a fresh job run).
 - `tests/unit/test_clients_models.py`: the new routes, failures in `run_many`.
 
+
+**The PyPI upload installs pgvector too (branch `claude/project-thread-2fs8bi`)**
+
+v0.2.20 (#81, `db.vectors`) was tagged and released on GitHub but refused by `pypi-publish.yml`: its gate found the runner's Postgres, ran the vector tests against it, and `CREATE EXTENSION vector` failed, because only `ci.yml` installed pgvector.
+
+- `.github/workflows/pypi-publish.yml`: installs `postgresql-<v>-pgvector` for the runner's newest server before the gate, as `ci.yml` does.
+
 **Embeddings, crops and the face store client, for strata-models' one face database (branch `claude/project-thread-2fs8bi`)**
 
 The owner decided that strata-models owns one face database for every app (faces, an embedding per model, people with per-app fields over global ones, opt-in tags left out of default search), and asked for common code to go here so other apps can build their own face screens. Three apps already keep embeddings in pgvector, each with `pgvector.sqlalchemy.Vector`, which has no SQLite form, so none of their unit tests could store one; review screens in three apps cut face crops by hand.
