@@ -4,6 +4,18 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-25
 
+**Embeddings, crops and the face store client, for strata-models' one face database (branch `claude/project-thread-2fs8bi`)**
+
+The owner decided that strata-models owns one face database for every app (faces, an embedding per model, people with per-app fields over global ones, opt-in tags left out of default search), and asked for common code to go here so other apps can build their own face screens. Three apps already keep embeddings in pgvector, each with `pgvector.sqlalchemy.Vector`, which has no SQLite form, so none of their unit tests could store one; review screens in three apps cut face crops by hand.
+
+- `src/strata_python/db/vectors.py` **new** (the type, operator and operator class are named with the extension's schema, `public`, because an app's connection searches only its own schema: bright-horizons sets `search_path TO brighthorizons, public` before every vector query instead): `Vector` (a `TypeDecorator`: `vector(dim)` on Postgres through a small `UserDefinedType` speaking pgvector's text form, JSON text elsewhere; the length is checked at the write), `hnsw_index`, `cosine_distance` (a zero vector is at distance 1, where pgvector answers NaN), `nearest` (Postgres orders by `<=>` and turns on `hnsw.iterative_scan` when the installed pgvector has it, 0.8+, since an older one refuses the name; SQLite reads the matching rows and orders them in Python).
+- `src/strata_python/images.py`: `webp_bytes`, `FORMATS`, `thumbnail(fmt=)`, `crop`, and `_cached` (the made-once logic `thumbnail` had inline, now shared).
+- `src/strata_python/clients/faces.py` **new**: the face store's endpoints as typed calls; `clients/models.py`: `request`, a public door to `_call` for it.
+- `tests/unit/test_db_vectors.py` **new** (SQLite and Postgres with pgvector), `tests/unit/test_images.py` (WebP thumbnails, crops: padding, squaring, clipping, refusals, the app's reader), `tests/unit/test_clients_faces.py` **new** (a scripted server over real HTTP).
+- `.github/workflows/ci.yml`: installs pgvector for the installed Postgres on Linux, so the Postgres vector tests run there.
+- `tests/unit/test_db_vectors.py`: the Postgres cases skip on Windows, with a reason: the Windows runner's Postgres has no pgvector package (CI failed there on `CREATE EXTENSION vector`); Linux CI still requires them.
+- `src/strata_python/db/vectors.py`: `nearest` on Postgres leaves out rows with no vector (review finding): their NULL distance sorted last, filled `k` when there were fewer real matches, and crashed on `float(None)`; the test now asks for more than there are.
+
 **`wer.find`: the prompt inside a longer take (branch `claude/project-thread-cvjjmf`)**
 
 strata-voice's hands-free studio cuts takes out of an always-open microphone, so a take can hold a false start or a word to someone else before or after the prompt. The owner asked for a quick way to "extract the relevant bit for the prompt". Finding a known text inside a transcript is the same word alignment `word_errors` does, so it lives beside it.

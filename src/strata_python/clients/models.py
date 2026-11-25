@@ -84,6 +84,12 @@ def _call(method: str, path: str, body: object = None, timeout: float = POLL_S +
         raise Unavailable(f"strata-models is not reachable at {url()}: {e}") from None
 
 
+def request(method: str, path: str, body: object = None, timeout: float = POLL_S + 15) -> Json:
+    """One call to any of the service's endpoints (`clients.faces` uses it for the face store), with this module's
+    errors: `Unavailable` when it is down, `JobFailed` for a 400, 404 or 422 with the service's `detail`."""
+    return _call(method, path, body, timeout)
+
+
 def available(timeout: float = 2.0) -> bool:
     """Is the service running?"""
     try:

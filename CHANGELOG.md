@@ -4,6 +4,12 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `strata_python.db.vectors`: `Vector(dim)`, an embedding column that is pgvector's `vector(dim)` on Postgres and JSON text on SQLite (no `pgvector` package needed), `hnsw_index(name, column)` for cosine search, and `nearest(db, Model.vector, query, k=, where=, select=, max_distance=)`, the closest rows with their cosine distance, ordered by `<=>` in Postgres and in Python on SQLite, so unit tests can hold and search embeddings. Replace a `pgvector.sqlalchemy.Vector` column and a hand-written `<=>` query with these.
+- `images.webp_bytes`, `images.thumbnail(..., fmt="webp")` (a JPEG keeps its old cache key) and `images.crop(src, box, px, cache_dir=, pad=, square=)`: a cached crop of one region of a picture, padded about its centre and squared, clipped to the picture, with the app's own reader through `make=`. Replace hand-cut face crops with it.
+- `strata_python.clients.faces`: the client for strata-models' face store (one database of faces, embeddings and people for every app), with typed `IndexedImage`, `StoredFace`, `Hit`, `Identity`, `Cluster` and `MergeSuggestion`; and `clients.models.request(method, path, body)` for any other endpoint of the service.
+
 ## 0.2.19 (2026-11-25)
 
 ### Added
