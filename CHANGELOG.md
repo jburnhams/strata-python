@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.22 (2026-11-25)
+
 ### Added
 
 - `clients.models.submit_many(role, items, app, priority=, model=, options=, batch=)` queues many jobs in one call (strata-models' `POST /api/jobs/bulk`) and returns their ids; `run_many(...)` waits for each, a failed job's `JobFailed` in its place. A call of 20 or more on a Claude model goes through its batch API at half price, answered within 24 hours: use it for bulk work and wait accordingly, or pass `batch=False`.
