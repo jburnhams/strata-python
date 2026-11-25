@@ -38,7 +38,6 @@ from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import InstrumentedAttribute, Session
 from sqlalchemy.types import TypeDecorator, UserDefinedType
 
-
 SCHEMA = (
     "public"  # where the extension lives: created once per database by its superuser, before any app's schema exists
 )
