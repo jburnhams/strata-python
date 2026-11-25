@@ -4,6 +4,12 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-25
 
+**The PyPI upload installs pgvector too (branch `claude/project-thread-2fs8bi`)**
+
+v0.2.20 (#81, `db.vectors`) was tagged and released on GitHub but refused by `pypi-publish.yml`: its gate found the runner's Postgres, ran the vector tests against it, and `CREATE EXTENSION vector` failed, because only `ci.yml` installed pgvector.
+
+- `.github/workflows/pypi-publish.yml`: installs `postgresql-<v>-pgvector` for the runner's newest server before the gate, as `ci.yml` does.
+
 **Embeddings, crops and the face store client, for strata-models' one face database (branch `claude/project-thread-2fs8bi`)**
 
 The owner decided that strata-models owns one face database for every app (faces, an embedding per model, people with per-app fields over global ones, opt-in tags left out of default search), and asked for common code to go here so other apps can build their own face screens. Three apps already keep embeddings in pgvector, each with `pgvector.sqlalchemy.Vector`, which has no SQLite form, so none of their unit tests could store one; review screens in three apps cut face crops by hand.

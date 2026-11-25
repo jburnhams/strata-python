@@ -40,6 +40,12 @@ jobs:
       # (v0.2.11 was refused that way).
       - name: ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      # The runner's Postgres is found by the db tests (strata_python.db.testserver), so db.vectors' Postgres tests run
+      # here too and need pgvector for that server, as in ci.yml (v0.2.20 was refused without it).
+      - name: pgvector
+        run: |
+          v=$(ls /usr/lib/postgresql | sort -n | tail -1)
+          ls /usr/share/postgresql/$v/extension/vector.control || sudo apt-get install -y postgresql-$v-pgvector
       - name: The tag and pyproject.toml agree
         run: test "v$(uv version --short)" = "${{ inputs.tag || github.ref_name }}"
       - run: uv run --locked strata-check
