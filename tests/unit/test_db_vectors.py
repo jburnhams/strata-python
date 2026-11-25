@@ -111,3 +111,20 @@ def test_cosine_distance() -> None:
     assert cosine_distance([0, 0], [1, 0]) == 1.0  # a zero vector sorts after every real match
     with pytest.raises(ValueError, match="zip"):
         cosine_distance([1, 0], [1, 0, 0])
+
+
+def test_works_from_a_connection_that_searches_only_the_apps_schema(engine: Engine) -> None:
+    """An app's connection sees only its own schema (strata_python.db's search_path): the type and operator must not need `public`."""
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as c:
+        c.execute(sa.text("CREATE SCHEMA IF NOT EXISTS myapp"))
+    with Session(engine) as db:
+        db.execute(sa.text("SET LOCAL search_path TO myapp"))
+        Base.metadata.create_all(db.connection())  # the DDL names public.vector too
+        db.add(Picture(id=1, app="x"))
+        db.flush()
+        db.add(Item(id=1, picture_id=1, model="a", vector=[0.0, 1.0, 0.0]))
+        db.flush()
+        hits = nearest(db, Item.vector, [1.0, 0.0, 0.0], k=1, where=[Item.model == "a"])
+        assert [(r.id, round(d, 3)) for r, d in hits] == [(1, 1.0)]  # myapp's own row, not public's

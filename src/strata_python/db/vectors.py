@@ -17,7 +17,9 @@ wrote its own `pgvector.sqlalchemy.Vector` column, which does not exist on SQLit
 an embedding at all. Here the column is `vector(dim)` on Postgres (the extension, created once per database by its
 superuser) and JSON text on SQLite, and `nearest` orders by pgvector's `<=>` in the database on Postgres and by the
 same cosine distance in Python on SQLite: tests get the real answers on a handful of rows, the service gets the index.
-No dependency on the `pgvector` package (or numpy): the column speaks pgvector's text form, `[1,2,3]`.
+No dependency on the `pgvector` package (or numpy): the column speaks pgvector's text form, `[1,2,3]`. The type and
+the operator are named with the extension's schema (`public.vector`, `OPERATOR(public.<=>)`), so they work from a
+connection whose search_path is the app's schema alone, with no `SET search_path TO app, public` before each query.
 
 `hnsw_index` is the index pgvector searches by cosine distance; SQLite ignores its Postgres options, so the same
 model makes a plain index there. Filtering with `where` on Postgres narrows an approximate HNSW scan, which can then
@@ -37,8 +39,14 @@ from sqlalchemy.orm import InstrumentedAttribute, Session
 from sqlalchemy.types import TypeDecorator, UserDefinedType
 
 
+SCHEMA = (
+    "public"  # where the extension lives: created once per database by its superuser, before any app's schema exists
+)
+
+
 class _PgVector(UserDefinedType[list[float]]):
-    """pgvector's `vector(dim)`, read and written in its text form."""
+    """pgvector's `vector(dim)`, read and written in its text form. Named with its schema: an app's connection searches
+    only the app's own schema (strata_python.db's search_path), where an unqualified `vector` does not resolve."""
 
     cache_ok = True
 
@@ -46,7 +54,7 @@ class _PgVector(UserDefinedType[list[float]]):
         self.dim = dim
 
     def get_col_spec(self, **kw: Any) -> str:
-        return f"vector({self.dim})" if self.dim else "vector"
+        return f"{SCHEMA}.vector({self.dim})" if self.dim else f"{SCHEMA}.vector"
 
 
 class Vector(TypeDecorator[list[float]]):
@@ -82,7 +90,7 @@ class Vector(TypeDecorator[list[float]]):
 
 
 def hnsw_index(
-    name: str, column: str, *, ops: str = "vector_cosine_ops", m: int = 16, ef_construction: int = 64
+    name: str, column: str, *, ops: str = f"{SCHEMA}.vector_cosine_ops", m: int = 16, ef_construction: int = 64
 ) -> sa.Index:
     """An HNSW index for cosine search on Postgres (a plain index on SQLite, which ignores the options). Put it in the
     model's `__table_args__`; Alembic's autogenerate writes it into the migration."""
@@ -139,7 +147,7 @@ def nearest(
             db.execute(sa.text("SET LOCAL hnsw.iterative_scan = relaxed_order"))  # filtered scans still fill k
         text = "[" + ",".join(repr(x) for x in q) + "]"
         literal = sa.cast(sa.bindparam(None, text, type_=sa.Text), _PgVector(None))
-        dist = cast("sa.ColumnElement[float]", column.op("<=>", return_type=sa.Float)(literal))
+        dist = cast("sa.ColumnElement[float]", column.op(f"OPERATOR({SCHEMA}.<=>)", return_type=sa.Float)(literal))
         if max_distance is not None:
             stmt = stmt.where(dist <= max_distance)
         rows = db.execute(stmt.add_columns(dist.label("distance")).order_by(dist).limit(k)).all()
