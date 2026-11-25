@@ -23,7 +23,21 @@ from strata_python.db.vectors import Vector, cosine_distance, hnsw_index, neares
 # As in test_db.py: CI sets STRATA_TEST_PG=1 (and installs pgvector), so a missing Postgres fails there instead of skipping.
 PG = os.environ.get("STRATA_TEST_PG") == "1" or (os.name != "nt" and os.geteuid() != 0 and testserver.available())
 PG = PG or bool(os.environ.get(guard.TEST_ADMIN_URL))
-BACKENDS = ["sqlite", pytest.param("postgres", marks=pytest.mark.skipif(not PG, reason="no throwaway Postgres"))]
+# The Windows runner's Postgres has no pgvector package (it would have to be built with nmake); Linux CI installs it and runs these, and SQLite
+# runs everywhere.
+NO_PGVECTOR = os.name == "nt"
+BACKENDS = [
+    "sqlite",
+    pytest.param(
+        "postgres",
+        marks=[
+            pytest.mark.skipif(not PG, reason="no throwaway Postgres"),
+            pytest.mark.skipif(
+                NO_PGVECTOR, reason="no pgvector for the Windows runner's Postgres; Linux CI runs these"
+            ),
+        ],
+    ),
+]
 
 
 class Base(MappedAsDataclass, DeclarativeBase):

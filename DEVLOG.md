@@ -13,6 +13,7 @@ The owner decided that strata-models owns one face database for every app (faces
 - `src/strata_python/clients/faces.py` **new**: the face store's endpoints as typed calls; `clients/models.py`: `request`, a public door to `_call` for it.
 - `tests/unit/test_db_vectors.py` **new** (SQLite and Postgres with pgvector), `tests/unit/test_images.py` (WebP thumbnails, crops: padding, squaring, clipping, refusals, the app's reader), `tests/unit/test_clients_faces.py` **new** (a scripted server over real HTTP).
 - `.github/workflows/ci.yml`: installs pgvector for the installed Postgres on Linux, so the Postgres vector tests run there.
+- `tests/unit/test_db_vectors.py`: the Postgres cases skip on Windows, with a reason: the Windows runner's Postgres has no pgvector package (CI failed there on `CREATE EXTENSION vector`); Linux CI still requires them.
 
 **`wer.find`: the prompt inside a longer take (branch `claude/project-thread-cvjjmf`)**
 
