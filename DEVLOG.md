@@ -4,6 +4,14 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-25
 
+**strata-models' bulk endpoint in the models client: normal and low work goes there (branch `claude/models-bulk`)**
+
+The owner asked strata-models to stop holding Claude jobs for a possible batch (no app ever sent a burst, and every call waited 10 to 15 s), to keep `POST /api/jobs` for one high priority job and to move all other work to the bulk endpoint. Every app reaches the service through this client, so it moves them all.
+
+- `src/strata_python/clients/models.py`: `submit` sends a `high` job to `/api/jobs` (without a priority, the only one there) and anything else to `/api/jobs/bulk` as a call of one, then reads the row back; `submit_many` and `run_many` are new.
+- `src/strata_python/testing.py`: `FakeModels` has the bulk endpoint, refuses a normal or low single job (400, as the service), and a poll without `?wait=` no longer moves a job on (the real service only reads it; `submit` now reads the row back, which made a fresh job run).
+- `tests/unit/test_clients_models.py`: the new routes, failures in `run_many`.
+
 **Embeddings, crops and the face store client, for strata-models' one face database (branch `claude/project-thread-2fs8bi`)**
 
 The owner decided that strata-models owns one face database for every app (faces, an embedding per model, people with per-app fields over global ones, opt-in tags left out of default search), and asked for common code to go here so other apps can build their own face screens. Three apps already keep embeddings in pgvector, each with `pgvector.sqlalchemy.Vector`, which has no SQLite form, so none of their unit tests could store one; review screens in three apps cut face crops by hand.

@@ -106,10 +106,60 @@ def submit(
     model: str | None = None,
     options: Mapping[str, Any] | None = None,
 ) -> Json:
-    """Queue a job and return its row at once (poll with `wait`). `options` changes the model's load options (a
-    variant loaded apart: evals)."""
-    body = {"role": role, "params": dict(params or {}), "app": app, "priority": priority, "model": model}
-    return _call("POST", "/api/jobs", {**body, "options": dict(options) if options is not None else None})
+    """Queue one job and return its row at once (poll with `wait`). `options` changes the model's load options (a
+    variant loaded apart: evals). A `high` job (someone is waiting on it) goes to the service's single-job endpoint;
+    normal and low work is queued in bulk, as a call of one: the service takes nothing else. An app with many jobs
+    should call `submit_many` instead, since only a bulk call of 20 or more gets the batch price."""
+    opts = dict(options) if options is not None else None
+    if priority == "high":
+        return _call(
+            "POST",
+            "/api/jobs",
+            {"role": role, "params": dict(params or {}), "app": app, "model": model, "options": opts},
+        )
+    (job_id,) = submit_many(role, [params or {}], app, priority, model, options)
+    return _call("GET", f"/api/jobs/{job_id}")
+
+
+def submit_many(
+    role: str,
+    items: Sequence[Mapping[str, Any] | None],
+    app: str,
+    priority: Priority = "normal",
+    model: str | None = None,
+    options: Mapping[str, Any] | None = None,
+    batch: bool | None = None,
+) -> list[int]:
+    """Queue one job per params in `items` in a single call (POST /api/jobs/bulk); returns their ids, in order (wait on
+    each with `wait`). On a Claude model a call of 20 or more goes through its batch API, half the price and answered
+    within 24 hours, so wait accordingly; `batch=True` batches however few, `batch=False` never. Nothing is queued
+    when the role or model is refused."""
+    body = {
+        "role": role, "items": [dict(p or {}) for p in items], "app": app, "priority": priority, "model": model,
+        "options": dict(options) if options is not None else None, "batch": batch,
+    }  # fmt: skip
+    return [int(i) for i in cast("list[Any]", _call("POST", "/api/jobs/bulk", body)["ids"])]
+
+
+def run_many(
+    role: str,
+    items: Sequence[Mapping[str, Any] | None],
+    app: str,
+    priority: Priority = "normal",
+    model: str | None = None,
+    options: Mapping[str, Any] | None = None,
+    batch: bool | None = None,
+    timeout: float | None = None,
+) -> list[Json | JobFailed]:
+    """`submit_many`, then each job's result in order; a job that failed gives its `JobFailed` in its place, so one
+    bad item does not lose the rest. `timeout` is per job (a batch can take up to 24 hours)."""
+    out: list[Json | JobFailed] = []
+    for job_id in submit_many(role, items, app, priority, model, options, batch):
+        try:
+            out.append(wait(job_id, timeout))
+        except JobFailed as e:
+            out.append(e)
+    return out
 
 
 def wait_job(job_id: int) -> Json:

@@ -232,3 +232,23 @@ def test_shot_boundaries_sends_an_absolute_path_and_reads_typed(service):
     assert (s.threshold, s.min_shot_s, s.scores, s.model, s.raw["width"]) == (0.3, 0.6, [], "ffmpeg-scene-score", 160)
     bare = sm.Shots.from_json({"cuts": [], "shots": [], "scores": [0.1, 0.9]})
     assert (bare.black, bare.fps, bare.scores) == ([], None, [0.1, 0.9])
+
+
+def test_normal_and_low_work_is_queued_in_bulk_and_only_high_alone(service):
+    sm.submit("faces", {"path": "/a.jpg"}, app="x", priority="high")
+    sm.submit("faces", {"path": "/b.jpg"}, app="x", priority="low")
+    assert [(j["priority"], j.get("batch", "single")) for j in service.jobs] == [
+        ("high", "single"),
+        ("low", None),
+    ]
+    with pytest.raises(sm.JobFailed, match="jobs/bulk"):
+        sm.request("POST", "/api/jobs", {"role": "faces", "app": "x", "priority": "normal"})
+    ids = sm.submit_many("faces", [{"path": "/c.jpg"}, None], app="x", batch=False)
+    assert ids == [3, 4]
+    assert [(j["params"], j["batch"]) for j in service.jobs[2:]] == [({"path": "/c.jpg"}, False), ({}, False)]
+    service.fail("CUDA out of memory")
+    out = sm.run_many("faces", [{}, {}], app="x", timeout=5)
+    assert isinstance(out[0], sm.JobFailed)
+    assert out[1] == FACES
+    with pytest.raises(sm.JobFailed, match="unknown role"):
+        sm.submit_many("nope", [{}], app="x")
