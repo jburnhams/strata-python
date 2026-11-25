@@ -13,6 +13,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 - `clients.models.submit`, `run` and `run_with_provenance` send a normal or low job through the bulk endpoint, as a call of one; only a `high` job goes to `POST /api/jobs`, the one priority strata-models takes there now. Nothing to change in an app; upgrade before strata-models does, or its normal and low calls are refused.
 
+## 0.2.21 (2026-11-25)
+
 ## 0.2.20 (2026-11-25)
 
 ### Added
