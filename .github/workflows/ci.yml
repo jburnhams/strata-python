@@ -38,7 +38,11 @@ jobs:
       # instead of skipping them. macOS has none, so they skip there and say so.
       - name: PostgreSQL server binaries
         if: matrix.os == 'ubuntu-latest'
-        run: ls /usr/lib/postgresql/*/bin/initdb || (sudo apt-get update && sudo apt-get install -y postgresql)
+        run: |
+          ls /usr/lib/postgresql/*/bin/initdb || (sudo apt-get update && sudo apt-get install -y postgresql)
+          # pgvector, for strata_python.db.vectors' Postgres tests (the version matching the installed server)
+          v=$(ls /usr/lib/postgresql | sort -n | tail -1)
+          ls /usr/share/postgresql/$v/extension/vector.control || (sudo apt-get update && sudo apt-get install -y postgresql-$v-pgvector)
       - name: ffmpeg (strata_python.media runs the real tools)
         shell: bash
         run: |

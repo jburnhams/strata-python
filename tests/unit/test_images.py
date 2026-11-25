@@ -130,3 +130,57 @@ def test_concurrent_requests_make_one_thumbnail(tmp_path):
 def test_jpeg_bytes():
     data = images.jpeg_bytes(Image.new("LA", (4, 4)), quality=50)
     assert data[:2] == b"\xff\xd8"
+
+
+def test_thumbnail_as_webp_is_its_own_cached_file(tmp_path):
+    p = _photo(tmp_path / "p.jpg", size=(2000, 1000))
+    jpg = images.thumbnail(p, 1600, cache_dir=tmp_path / "c")
+    webp = images.thumbnail(p, 1600, cache_dir=tmp_path / "c", fmt="webp", quality=80)
+    assert webp.endswith(".webp")
+    assert jpg.endswith(".jpg")
+    assert webp != jpg
+    with Image.open(webp) as im:
+        assert im.format == "WEBP"
+        assert im.size == (1600, 800)
+    assert images.thumbnail(p, 1600, cache_dir=tmp_path / "c", fmt="webp", quality=80) == webp
+    with pytest.raises(ValueError, match="fmt is one of"):
+        images.thumbnail(p, 100, cache_dir=tmp_path / "c", fmt="gif")
+
+
+def test_crop_cuts_a_padded_square_round_the_box(tmp_path):
+    p = _photo(tmp_path / "p.jpg", size=(400, 200))  # blue in the top-left 100x50
+    out = images.crop(p, (20, 10, 60, 40), 64, cache_dir=tmp_path / "c", pad=1.0)
+    assert out.endswith(".webp")
+    assert images.crop(p, (20, 10, 60, 40), 64, cache_dir=tmp_path / "c", pad=1.0) == out
+    with Image.open(out) as im:
+        assert im.size == (40, 40)  # square on the long side (40), never enlarged past the region
+        r, _, b = im.convert("RGB").getpixel((20, 20))
+        assert b > 200
+        assert r < 60  # the blue corner, not the red rest
+    with Image.open(images.crop(p, (20, 10, 60, 40), 16, cache_dir=tmp_path / "c", pad=2.0, square=False)) as im:
+        assert im.size == (16, 11)  # 80x60 round (40, 25), clipped at the top to 80x55, shrunk to 16 on its long side
+
+
+def test_crop_clips_at_the_edge_and_refuses_empty_or_outside_boxes(tmp_path):
+    p = _photo(tmp_path / "p.jpg", size=(400, 200))
+    with Image.open(images.crop(p, (380, 180, 400, 200), 100, cache_dir=tmp_path / "c", pad=3.0, fmt="jpeg")) as im:
+        assert im.size == (40, 40)  # a 60x60 square centred on (390, 190), clipped to 360..400 and 160..200
+    with pytest.raises(ValueError, match="empty box"):
+        images.crop(p, (10, 10, 10, 20), 64, cache_dir=tmp_path / "c")
+    with pytest.raises(ValueError, match="outside the 400x200"):
+        images.crop(p, (500, 300, 520, 320), 64, cache_dir=tmp_path / "c")
+
+
+def test_crop_with_the_apps_own_reader(tmp_path):
+    src = tmp_path / "raw.cr3"
+    src.write_bytes(b"not a picture Pillow reads")
+    seen = []
+
+    def develop(path, px):
+        seen.append(px)
+        return Image.new("RGB", (300, 300), (0, 200, 0))
+
+    with Image.open(images.crop(src, (100, 100, 200, 200), 50, cache_dir=tmp_path / "c", make=develop)) as im:
+        assert im.size == (50, 50)
+        assert im.convert("RGB").getpixel((25, 25))[1] > 150
+    assert seen == [0]  # asked for the full-size picture
