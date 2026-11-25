@@ -382,11 +382,7 @@ class FakeModels:
                 "roles": [{"key": r, "model": self._model(r), "settings_hash": self._hash(r)} for r in self.results]
             }
 
-        @app.post("/api/jobs")
-        def submit(body: Json) -> Json:  # pyright: ignore[reportUnusedFunction]
-            role = str(body.get("role"))
-            if role not in self.results:
-                raise HTTPException(422, f"unknown role {role!r}")
+        def add(body: Json) -> Json:
             job: Json = {
                 **body,
                 "id": len(self.jobs) + 1,
@@ -398,12 +394,38 @@ class FakeModels:
             }
             self._asked[job["id"]] = cast("Json", body.get("options") or {})
             self.jobs.append(job)
-            return dict(job)
+            return job
+
+        def known(role: str) -> None:
+            if role not in self.results:
+                raise HTTPException(422, f"unknown role {role!r}")
+
+        @app.post("/api/jobs")
+        def submit(body: Json) -> Json:  # pyright: ignore[reportUnusedFunction]
+            known(str(body.get("role")))
+            if body.get("priority", "high") != "high":  # as the service: one job on its own is someone waiting on it
+                raise HTTPException(
+                    400, "a single job is high priority: queue normal and low work with POST /api/jobs/bulk"
+                )
+            return dict(add({**body, "priority": "high"}))
+
+        @app.post("/api/jobs/bulk")
+        def submit_bulk(body: Json) -> Json:  # pyright: ignore[reportUnusedFunction]
+            known(str(body.get("role")))
+            items = cast("list[Json]", body.get("items") or [])
+            rest = {k: v for k, v in body.items() if k not in ("items", "batch")}
+            batch = body.get("batch")
+            return {
+                "ids": [
+                    add({**rest, "params": p, "priority": rest.get("priority") or "normal", "batch": batch})["id"]
+                    for p in items
+                ]
+            }
 
         @app.get("/api/jobs/{job_id}")
-        def poll(job_id: int, wait: float = 0) -> Json:  # pyright: ignore[reportUnusedFunction]
+        def poll(job_id: int, wait: float | None = None) -> Json:  # pyright: ignore[reportUnusedFunction]
             job = self._job(job_id, HTTPException)
-            if job["status"] in ("queued", "running"):
+            if wait is not None and job["status"] in ("queued", "running"):  # a look without `wait` moves nothing on
                 n = self._polls[job_id] = self._polls.get(job_id, 0) + 1
                 if job["status"] == "queued":
                     self._start(job)

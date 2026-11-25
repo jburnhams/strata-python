@@ -4,6 +4,15 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `clients.models.submit_many(role, items, app, priority=, model=, options=, batch=)` queues many jobs in one call (strata-models' `POST /api/jobs/bulk`) and returns their ids; `run_many(...)` waits for each, a failed job's `JobFailed` in its place. A call of 20 or more on a Claude model goes through its batch API at half price, answered within 24 hours: use it for bulk work and wait accordingly, or pass `batch=False`.
+- `FakeModels` answers `POST /api/jobs/bulk` (each job keeps the call's `batch`), refuses a normal or low job sent to `POST /api/jobs` as the service now does, and moves a job on only when it is polled with `?wait=`.
+
+### Changed
+
+- `clients.models.submit`, `run` and `run_with_provenance` send a normal or low job through the bulk endpoint, as a call of one; only a `high` job goes to `POST /api/jobs`, the one priority strata-models takes there now. Nothing to change in an app; upgrade before strata-models does, or its normal and low calls are refused.
+
 ## 0.2.21 (2026-11-25)
 
 ## 0.2.20 (2026-11-25)

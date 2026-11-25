@@ -4,6 +4,21 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-25
 
+**Windows CI installs ffmpeg even when the Chocolatey feed refuses it**
+
+The Windows leg failed twice on the same head: the Chocolatey community feed answered an error for `ffmpeg` 9.1.0, `choco` reported "installed 0/0 packages" and exited 0, and 28 media and derive tests then failed for want of ffmpeg.
+
+- `.github/workflows/ci.yml`: on Windows, when `choco` does not leave `ffmpeg.exe` behind, download the static win64 build from BtbN/FFmpeg-Builds and put its `bin` on the path; a new step checks `ffmpeg` and `ffprobe` run on every OS, so a missing tool fails at install, not as test errors.
+
+**strata-models' bulk endpoint in the models client: normal and low work goes there (branch `claude/models-bulk`)**
+
+The owner asked strata-models to stop holding Claude jobs for a possible batch (no app ever sent a burst, and every call waited 10 to 15 s), to keep `POST /api/jobs` for one high priority job and to move all other work to the bulk endpoint. Every app reaches the service through this client, so it moves them all.
+
+- `src/strata_python/clients/models.py`: `submit` sends a `high` job to `/api/jobs` (without a priority, the only one there) and anything else to `/api/jobs/bulk` as a call of one, then reads the row back; `submit_many` and `run_many` are new.
+- `src/strata_python/testing.py`: `FakeModels` has the bulk endpoint, refuses a normal or low single job (400, as the service), and a poll without `?wait=` no longer moves a job on (the real service only reads it; `submit` now reads the row back, which made a fresh job run).
+- `tests/unit/test_clients_models.py`: the new routes, failures in `run_many`.
+
+
 **The PyPI upload installs pgvector too (branch `claude/project-thread-2fs8bi`)**
 
 v0.2.20 (#81, `db.vectors`) was tagged and released on GitHub but refused by `pypi-publish.yml`: its gate found the runner's Postgres, ran the vector tests against it, and `CREATE EXTENSION vector` failed, because only `ci.yml` installed pgvector.
