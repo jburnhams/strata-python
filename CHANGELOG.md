@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.19 (2026-11-25)
+
 ### Added
 
 - `wer.find(said, heard_words)` returns `Found(start, end, errors)`: which run of a transcript's words is the text meant, ignoring what was said before and after it (a false start, "sorry, again"), with the latest full reading winning a tie. Crop a recorded take to that run's word timings instead of failing it for the extra words.
