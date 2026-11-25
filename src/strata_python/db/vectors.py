@@ -147,6 +147,8 @@ def nearest(
         text = "[" + ",".join(repr(x) for x in q) + "]"
         literal = sa.cast(sa.bindparam(None, text, type_=sa.Text), _PgVector(None))
         dist = cast("sa.ColumnElement[float]", column.op(f"OPERATOR({SCHEMA}.<=>)", return_type=sa.Float)(literal))
+        # A row with no vector has a NULL distance, which sorts last and would fill k when there are fewer real matches.
+        stmt = stmt.where(column.is_not(None))
         if max_distance is not None:
             stmt = stmt.where(dist <= max_distance)
         rows = db.execute(stmt.add_columns(dist.label("distance")).order_by(dist).limit(k)).all()

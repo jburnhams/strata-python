@@ -108,6 +108,7 @@ def test_nearest_orders_by_cosine_distance_and_filters(engine: Engine) -> None:
         hits = nearest(db, Item.vector, [1.0, 0.0, 0.0], k=3, where=[Item.model == "a"])
         assert [(r.id, round(d, 4)) for r, d in hits] == [(1, 0.0), (2, round(1 - 0.9 / math.sqrt(0.82), 4)), (3, 1.0)]
         assert [r.id for r, _ in nearest(db, Item.vector, [1, 0, 0], k=10, max_distance=0.5)] in ([1, 4, 2], [4, 1, 2])
+        assert len(nearest(db, Item.vector, [1, 0, 0], k=10)) == 5  # row 6 has no vector: never a hit, never a crash
         far = nearest(db, Item.vector, [1, 0, 0], k=1, where=[Item.id == 5])
         assert [(r.id, round(d, 4)) for r, d in far] == [(5, 2.0)]
 
