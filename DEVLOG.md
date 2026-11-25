@@ -4,6 +4,12 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-25
 
+**Windows CI installs ffmpeg even when the Chocolatey feed refuses it**
+
+The Windows leg failed twice on the same head: the Chocolatey community feed answered an error for `ffmpeg` 9.1.0, `choco` reported "installed 0/0 packages" and exited 0, and 28 media and derive tests then failed for want of ffmpeg.
+
+- `.github/workflows/ci.yml`: on Windows, when `choco` does not leave `ffmpeg.exe` behind, download the static win64 build from BtbN/FFmpeg-Builds and put its `bin` on the path; a new step checks `ffmpeg` and `ffprobe` run on every OS, so a missing tool fails at install, not as test errors.
+
 **strata-models' bulk endpoint in the models client: normal and low work goes there (branch `claude/models-bulk`)**
 
 The owner asked strata-models to stop holding Claude jobs for a possible batch (no app ever sent a burst, and every call waited 10 to 15 s), to keep `POST /api/jobs` for one high priority job and to move all other work to the bulk endpoint. Every app reaches the service through this client, so it moves them all.
