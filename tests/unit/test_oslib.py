@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import sys
@@ -122,6 +123,15 @@ def test_lower_priority_in_this_process_with_no_change():
     oslib.lower_priority(-20)
 
 
+def _priority_child(code: str, *args: str) -> str:
+    """Run `code` in a child and return what it prints; a failure says why, with this process's own nice value,
+    which the child starts from (a child cannot go below it without privileges)."""
+    r = subprocess.run([sys.executable, "-c", code, *args], capture_output=True, text=True, check=False)
+    here = None if oslib.WIN else os.getpriority(os.PRIO_PROCESS, 0)
+    assert r.returncode == 0, f"child exited {r.returncode} (this process is at nice {here}): {r.stderr}"
+    return r.stdout
+
+
 @pytest.mark.skipif(oslib.WIN, reason="nice values are POSIX; Windows sets a priority class")
 @pytest.mark.parametrize(("start", "nice", "expected"), [(5, 10, 10), (15, 10, 15), (0, 19, 19)])
 def test_lower_priority_sets_the_nice_value_absolutely(start, nice, expected):
@@ -134,10 +144,7 @@ def test_lower_priority_sets_the_nice_value_absolutely(start, nice, expected):
         "oslib.lower_priority(int(sys.argv[2]))\n"
         "print(os.getpriority(os.PRIO_PROCESS, 0))\n"
     )
-    out = subprocess.run(
-        [sys.executable, "-c", code, str(start), str(nice)], capture_output=True, text=True, check=True
-    ).stdout
-    assert int(out) == expected
+    assert int(_priority_child(code, str(start), str(nice))) == expected
 
 
 def _can_start_below_zero() -> bool:
@@ -158,8 +165,7 @@ def test_lower_priority_from_below_zero_reaches_19():
         "oslib.lower_priority(19)\n"
         "print(os.getpriority(os.PRIO_PROCESS, 0))\n"
     )
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
-    assert int(out) == 19
+    assert int(_priority_child(code)) == 19
 
 
 def test_detached_kwargs_start_a_new_session():

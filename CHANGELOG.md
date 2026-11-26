@@ -9,6 +9,9 @@ What each release adds or changes for an app that depends on strata-python, newe
 ### Added
 
 - `clients.models.speaker_embeddings(items, app)` and `SpeakerEmbeddings`: one normalised voice vector per (path, clip) from strata-models' `speaker-embedding` role (ECAPA), to keep one person's speech out of a recording that holds others. `FakeModels` answers the role (`MODELS_RESULTS["speaker-embedding"]`).
+- `images` reads what phones and cameras write, not only what Pillow reads on its own: HEIC and HEIF (pillow-heif), JPEG XL (pillow-jxl-plugin) and camera raw files (DNG, CR2, CR3, NEF, ARW, ORF, RW2, RAF and the rest LibRaw knows, developed by rawpy with the camera's white balance and turned as the camera was held), beside Pillow's AVIF, WebP, TIFF and the rest. `open_upright`, `thumbnail` and `crop` take them all with no `make=`. New: `extensions()` (every extension they open, for picking pictures out of a folder), `is_raw(path)`, `open_raw(path, half=)` and `size_upright(path)` (the size `open_upright` returns, read from the header: a photo taken on its side reports its sides swapped). The `[images]` extra now installs the three readers.
+- `testing.tiny_dng(path, size, orientation=)` writes a small camera raw file LibRaw reads, for an app's picture tests.
+- `testing.tiny_picture(path, size, colour)` writes a picture in any format the readers write (HEIC, AVIF, JPEG XL, WebP...). Make test HEICs with it rather than `Image.save`: the HEIC encoder lowers the priority of its threads, and on macOS that lowers the whole test process and every process it starts after.
 
 ## 0.2.22 (2026-11-25)
 

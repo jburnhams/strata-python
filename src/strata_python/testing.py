@@ -17,6 +17,8 @@ Testing policy).
   run_cli          an argparse `main(argv)` in this process -> CliResult; run_module the same as a real `python -m`
   assert_openapi_current  the committed schema file equals what the app answers now (cli.add_openapi writes it)
   sine_wav         a short PCM WAV of a tone (or silence), for an app's upload and `wav.read_wav` tests
+  tiny_dng         a small camera raw file (a linear DNG) LibRaw reads, for `images` and an app's picture tests
+  tiny_picture     a small picture in any format the `images` readers write (HEIC, AVIF, JPEG XL...), made in a child
   FakeModels       a stand-in strata-models service (jobs, leases, registry) for `strata_python.clients.models`; served
                    by the `fake_models` fixture. MODELS_RESULTS holds one reply per role in the service's shapes.
 """
@@ -535,3 +537,73 @@ def sine_wav(
         w.setframerate(rate)
         w.writeframes(bytes(frames))
     return out.getvalue()
+
+
+def tiny_picture(
+    path: str | os.PathLike[str], size: tuple[int, int] = (64, 48), colour: tuple[int, int, int] = (200, 30, 30)
+) -> str:
+    """Write a picture of one `colour` in the format its extension names (`.heic`, `.avif`, `.jxl`, `.webp`, `.png`...),
+    with the `images` readers registered. It is encoded in a child process, because libheif's x265 encoder lowers the
+    priority of the threads it starts (nice 10), and on macOS a thread's nice is the whole process's: a HEIC saved in
+    a test run left pytest at nice 19, and every child it started after that inherited it."""
+    code = (
+        "import sys\n"
+        "from PIL import Image\n"
+        "from strata_python import images\n"
+        "images.extensions()\n"
+        "w, h, r, g, b = (int(v) for v in sys.argv[2:])\n"
+        "Image.new('RGB', (w, h), (r, g, b)).save(sys.argv[1])\n"
+    )
+    argv = [sys.executable, "-c", code, os.fspath(path), *map(str, (*size, *colour))]
+    subprocess.run(argv, check=True, capture_output=True)  # noqa: S603 (this interpreter, our own code)
+    return os.fspath(path)
+
+
+def tiny_dng(
+    path: str | os.PathLike[str],
+    size: tuple[int, int] = (64, 48),
+    *,
+    orientation: int = 1,
+    top: tuple[int, int, int] = (65535, 0, 0),
+    bottom: tuple[int, int, int] = (0, 0, 65535),
+) -> str:
+    """Write a camera raw file no camera made: a linear-raw DNG (16-bit RGB, one strip, the tags LibRaw asks for)
+    whose top half is `top` and bottom half `bottom`, stored with the EXIF `orientation` given. Real raw files are
+    tens of megabytes and their makers' formats closed; this is enough to see a raw file read, developed and turned."""
+    import struct
+
+    w, h = size
+
+    def row(c: tuple[int, int, int]) -> bytes:
+        return struct.pack("<3H", *c) * w
+
+    data = row(top) * (h // 2) + row(bottom) * (h - h // 2)
+    name = b"strata test\0"
+    short, long_, byte, ascii_, srational = 3, 4, 1, 2, 10
+    # (tag, type, count, value): an int, bytes kept in the entry or after it, or a placeholder filled in below.
+    tags: list[tuple[int, int, int, int | bytes]] = [
+        (254, long_, 1, 0), (256, long_, 1, w), (257, long_, 1, h), (258, short, 3, struct.pack("<3H", 16, 16, 16)),
+        (259, short, 1, 1), (262, short, 1, 34892), (271, ascii_, len(name), name), (272, ascii_, len(name), name),
+        (273, long_, 1, 0), (274, short, 1, orientation), (277, short, 1, 3), (278, long_, 1, h),
+        (279, long_, 1, len(data)), (284, short, 1, 1), (50706, byte, 4, bytes([1, 4, 0, 0])),
+        (50708, ascii_, len(name), name), (50717, long_, 1, 65535),
+        (50721, srational, 9, struct.pack("<18i", *[v for i in range(9) for v in ((1, 1) if i % 4 == 0 else (0, 1))])),
+    ]  # fmt: skip
+    after = 8 + 2 + len(tags) * 12 + 4
+    big = sum(len(v) + len(v) % 2 for _, _, _, v in tags if isinstance(v, bytes) and len(v) > 4)
+    tags = [(t, ty, n, after + big if t == 273 else v) for t, ty, n, v in tags]  # the strip follows the long values
+    blobs, entries = b"", b""
+    for tag, typ, count, value in tags:
+        if isinstance(value, bytes) and len(value) > 4:
+            entries += struct.pack("<HHII", tag, typ, count, after + len(blobs))
+            blobs += value + b"\0" * (len(value) % 2)
+        elif isinstance(value, bytes):
+            entries += struct.pack("<HHI", tag, typ, count) + value.ljust(4, b"\0")
+        elif typ == short:
+            entries += struct.pack("<HHIHH", tag, typ, count, value, 0)
+        else:
+            entries += struct.pack("<HHII", tag, typ, count, value)
+    out = b"II*\0" + struct.pack("<IH", 8, len(tags)) + entries + struct.pack("<I", 0) + blobs + data
+    with open(path, "wb") as f:
+        f.write(out)
+    return os.fspath(path)

@@ -4,9 +4,10 @@ import os
 import threading
 
 import pytest
+import rawpy  # noqa: F401 (numpy, which rawpy loads, must be in sys.modules before a pytester run, or it loads twice)
 from PIL import Image
 
-from strata_python import images
+from strata_python import images, testing
 
 
 def _photo(path, size=(400, 200), orientation=None, colour=(200, 30, 30)):
@@ -184,3 +185,67 @@ def test_crop_with_the_apps_own_reader(tmp_path):
         assert im.size == (50, 50)
         assert im.convert("RGB").getpixel((25, 25))[1] > 150
     assert seen == [0]  # asked for the full-size picture
+
+
+# ---- formats beyond Pillow's own: HEIC (iPhones), AVIF, JPEG XL and camera raw ------------------------------------------
+
+
+@pytest.mark.parametrize("ext", [".heic", ".avif", ".jxl", ".webp", ".tif", ".png"])
+def test_open_upright_reads_what_phones_and_cameras_write(tmp_path, ext):
+    images.extensions()  # registers the HEIC and JPEG XL readers, as every reader here does
+    nice = None if os.name == "nt" else os.getpriority(os.PRIO_PROCESS, 0)
+    p = testing.tiny_picture(tmp_path / f"p{ext}")
+    assert nice is None or os.getpriority(os.PRIO_PROCESS, 0) == nice  # encoded in a child (x265 lowers its nice)
+    im = images.open_upright(p)
+    assert im.size == (64, 48)
+    assert images.size_upright(p) == (64, 48)
+    assert images.flatten(im).getpixel((10, 10))[0] > 150  # red, after lossy encoders
+
+
+def test_extensions_name_every_format_read_here():
+    ext = images.extensions()
+    assert {".jpg", ".png", ".heic", ".heif", ".avif", ".jxl", ".dng", ".cr3", ".nef", ".arw"} <= ext
+    assert ".pdf" not in ext  # Pillow writes PDFs but cannot open them
+    assert images.is_raw("/x/IMG_1.CR3")
+    assert not images.is_raw("/x/IMG_1.HEIC")
+
+
+def test_a_raw_file_is_developed_and_turned_as_the_camera_held_it(tmp_path):
+    p = testing.tiny_dng(tmp_path / "a.dng", (64, 48), orientation=6)  # top red, bottom blue, held on its side
+    im = images.open_upright(p)
+    assert im.mode == "RGB"
+    assert im.size == (48, 64) == images.size_upright(p)
+    assert im.getpixel((47, 5))[0] > 200  # red now on the right
+    assert im.getpixel((0, 5))[2] > 200  # blue on the left
+    flat = images.open_upright(testing.tiny_dng(tmp_path / "b.dng", (64, 48)))
+    assert flat.size == (64, 48)
+    assert flat.getpixel((5, 0))[0] > 200
+    assert flat.getpixel((5, 47))[2] > 200
+
+
+def test_a_raw_file_develops_at_half_size_for_a_small_draft(tmp_path):
+    p = testing.tiny_dng(tmp_path / "big.dng", (400, 300))
+    # LibRaw halves a mosaic (a real camera's raw); a linear DNG like this one comes back whole either way.
+    assert images.open_upright(p, draft=(100, 100)).size == images.open_upright(p, draft=(200, 200)).size == (400, 300)
+    assert os.path.isfile(images.thumbnail(p, 64, cache_dir=tmp_path / "c"))
+
+
+def test_a_file_no_reader_opens_is_an_oserror(tmp_path):
+    bad = tmp_path / "x.cr2"
+    bad.write_bytes(b"not a raw file")
+    for f in (
+        lambda: images.open_upright(bad),
+        lambda: images.open_upright(bad, draft=(10, 10)),
+        lambda: images.size_upright(bad),
+    ):
+        with pytest.raises(OSError, match="cannot read the raw file"):
+            f()
+    junk = tmp_path / "x.heic"
+    junk.write_bytes(b"not a picture")
+    with pytest.raises(OSError, match="cannot identify"):
+        images.open_upright(junk)
+
+
+def test_size_upright_swaps_the_sides_of_a_photo_taken_on_its_side(tmp_path):
+    assert images.size_upright(_photo(tmp_path / "p.jpg", orientation=6)) == (200, 400)
+    assert images.size_upright(_photo(tmp_path / "q.jpg", orientation=3)) == (400, 200)
