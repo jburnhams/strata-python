@@ -4,6 +4,15 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-26
 
+**A client for strata-models' speaker-embedding role**
+
+strata-voice is getting an Upload screen for found recordings of its speaker, which hold other voices; it keeps the sentences that sound like the speaker's studio takes. strata-models now serves `speaker-embedding` (ECAPA in a worker venv of its own, same day), so its contract and client belong here.
+
+- `src/strata_python/clients/models.py`: `speaker_embeddings` (items of path and optional clip, made absolute, in one job so a recording is decoded once) and `SpeakerEmbeddings` (a null in place of a stretch too short to place); the role joins `ROLES`.
+- `src/strata_python/testing.py`: `MODELS_RESULTS["speaker-embedding"]`, in the worker's own shape.
+- `tests/unit/test_clients_models.py`: the params sent and the typed result.
+- `README.md` (section 5b): `speaker_embeddings` and `SpeakerEmbeddings` listed; speaker-embedding no longer among the roles without a runtime (review, Codex).
+
 **images reads HEIC, JPEG XL and camera raw files**
 
 The owner asked for strata-models' face store to take any picture format, HEIC first. The face store opens pictures through `images` (the kept medium copy, crops, a picture's size), so the readers belong here, where strata-stills and strata-360 get them too. Pillow 13 already reads AVIF, WebP, TIFF, PNG, GIF and BMP.

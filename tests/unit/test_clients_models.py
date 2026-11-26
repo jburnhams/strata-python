@@ -144,10 +144,11 @@ def test_the_other_shortcuts_send_what_the_service_expects(service):
     sm.audio_quality("talk.wav", app="x", reference="clean.wav", metrics=["intrusive"])
     sm.audio_quality("talk.wav", app="x")
     sm.enhance_video("tape.mkv", app="strata-tapes", size=[1440, 1080])
+    sm.speaker_embeddings([("found.wav", (1, 2.5)), ("take.wav", None)], app="strata-voice")
     jobs = service.jobs
     assert [j["role"] for j in jobs] == [
         "vision-language", "text", "image-generate", "image-embed", "face-kind", "face-kind", "denoise-audio",
-        "audio-quality", "audio-quality", "video-enhance",
+        "audio-quality", "audio-quality", "video-enhance", "speaker-embedding",
     ]  # fmt: skip
     p = [j["params"] for j in jobs]
     assert p[0]["prompt"] == "What is here?"
@@ -163,6 +164,10 @@ def test_the_other_shortcuts_send_what_the_service_expects(service):
     assert (p[7]["metrics"], p[7]["reference"].endswith("clean.wav")) == (["intrusive"], True)
     assert set(p[8]) == {"path"}
     assert p[9]["size"] == [1440, 1080]
+    found, take = p[10]["items"]
+    assert (found["clip"], found["path"].endswith("found.wav"), found["path"] != "found.wav", set(take)) == (
+        [1.0, 2.5], True, True, {"path"},
+    )  # fmt: skip
 
 
 def test_the_other_typed_results():
@@ -182,6 +187,9 @@ def test_the_other_typed_results():
     assert (c.sample_rate, c.lufs_out, c.removed_db) == (48000, -14.0, 6.5)
     q = sm.AudioQuality.from_json(QUALITY)
     assert (q.dnsmos["ovrl"], q.squim["si_sdr"], q.intrusive) == (3.0, 14.2, {})
+    sp = sm.SpeakerEmbeddings.from_json(RESULTS["speaker-embedding"])
+    assert (sp.embeddings[0], sp.embeddings[1], sp.seconds, sp.dim) == ([0.6, 0.8], None, [3.2, 0.3, 30.0], 2)
+    assert sm.SpeakerEmbeddings.from_json({}).embeddings == []
     v = sm.EnhancedVideo.from_json(VIDEO)
     assert (v.fps, v.frames, v.crops[0].box, v.crops[0].stills, v.quality["skipped"]) == (
         50.0, 400, (100, 50, 80, 80), ["/out/v-face-3.png"], "no numpy",
