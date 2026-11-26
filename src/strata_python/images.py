@@ -94,7 +94,8 @@ def _register_plugins() -> None:
 def extensions() -> frozenset[str]:
     """Every file extension the readers here open, lower case with the dot (`.heic`, `.jpg`, `.cr3`)."""
     _register_plugins()
-    return frozenset(Image.registered_extensions()) | RAW_EXTENSIONS
+    # Pillow registers some extensions for writing only (.pdf, .ps, .palm): keep those it can open.
+    return frozenset(e for e, fmt in Image.registered_extensions().items() if fmt in Image.OPEN) | RAW_EXTENSIONS
 
 
 def is_raw(path: str | os.PathLike[str]) -> bool:

@@ -203,6 +203,7 @@ def test_open_upright_reads_what_phones_and_cameras_write(tmp_path, ext):
 def test_extensions_name_every_format_read_here():
     ext = images.extensions()
     assert {".jpg", ".png", ".heic", ".heif", ".avif", ".jxl", ".dng", ".cr3", ".nef", ".arw"} <= ext
+    assert ".pdf" not in ext  # Pillow writes PDFs but cannot open them
     assert images.is_raw("/x/IMG_1.CR3")
     assert not images.is_raw("/x/IMG_1.HEIC")
 
