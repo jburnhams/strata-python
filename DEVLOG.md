@@ -22,6 +22,7 @@ The owner asked for strata-models' face store to take any picture format, HEIC f
 - `src/strata_python/testing.py`: **new** `tiny_dng`, a linear-raw DNG written byte by byte (no camera's file can be committed to a public repo, and LibRaw reads this one). Being linear, LibRaw does not halve it, so the half-size path is exercised but not measured.
 - `tests/unit/test_images.py`: HEIC, AVIF, JPEG XL, WebP, TIFF and PNG through `open_upright` and `size_upright`; a raw file developed and turned; a draft and a thumbnail of one; unreadable files as `OSError`; swapped sizes for orientation 6.
 - `CHANGELOG.md`, `README.md`.
+- Then macOS CI failed twice in `test_oslib`'s priority tests: pytest itself was at nice 19, so its children could not set a lower value. Cause, traced with strace: libheif's x265 encoder calls `setpriority(PRIO_PROCESS, 0, 10)` in each worker thread. On Linux that changes only the thread; on macOS it changes the process. Saving a HEIC in the test process did it. `testing.py`: **new** `tiny_picture`, which encodes in a child; `tests/unit/test_images.py` uses it and checks this process's nice is unchanged. It also imports `rawpy` at the top, because a pytester run that loads numpy (pgvector) removes it from `sys.modules` afterwards, and numpy cannot load twice (3 raw tests failed in a fixed-order local run). `tests/unit/test_oslib.py`: a priority child that fails shows its stderr and the parent's nice value; `README.md`, `CHANGELOG.md`: `tiny_picture`.
 
 ## 2026-11-25
 
