@@ -18,6 +18,7 @@ Testing policy).
   assert_openapi_current  the committed schema file equals what the app answers now (cli.add_openapi writes it)
   sine_wav         a short PCM WAV of a tone (or silence), for an app's upload and `wav.read_wav` tests
   tiny_dng         a small camera raw file (a linear DNG) LibRaw reads, for `images` and an app's picture tests
+  tiny_picture     a small picture in any format the `images` readers write (HEIC, AVIF, JPEG XL...), made in a child
   FakeModels       a stand-in strata-models service (jobs, leases, registry) for `strata_python.clients.models`; served
                    by the `fake_models` fixture. MODELS_RESULTS holds one reply per role in the service's shapes.
 """
@@ -536,6 +537,26 @@ def sine_wav(
         w.setframerate(rate)
         w.writeframes(bytes(frames))
     return out.getvalue()
+
+
+def tiny_picture(
+    path: str | os.PathLike[str], size: tuple[int, int] = (64, 48), colour: tuple[int, int, int] = (200, 30, 30)
+) -> str:
+    """Write a picture of one `colour` in the format its extension names (`.heic`, `.avif`, `.jxl`, `.webp`, `.png`...),
+    with the `images` readers registered. It is encoded in a child process, because libheif's x265 encoder lowers the
+    priority of the threads it starts (nice 10), and on macOS a thread's nice is the whole process's: a HEIC saved in
+    a test run left pytest at nice 19, and every child it started after that inherited it."""
+    code = (
+        "import sys\n"
+        "from PIL import Image\n"
+        "from strata_python import images\n"
+        "images.extensions()\n"
+        "w, h, r, g, b = (int(v) for v in sys.argv[2:])\n"
+        "Image.new('RGB', (w, h), (r, g, b)).save(sys.argv[1])\n"
+    )
+    argv = [sys.executable, "-c", code, os.fspath(path), *map(str, (*size, *colour))]
+    subprocess.run(argv, check=True, capture_output=True)  # noqa: S603 (this interpreter, our own code)
+    return os.fspath(path)
 
 
 def tiny_dng(

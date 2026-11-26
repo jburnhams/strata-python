@@ -4,6 +4,7 @@ import os
 import threading
 
 import pytest
+import rawpy  # noqa: F401 (numpy, which rawpy loads, must be in sys.modules before a pytester run, or it loads twice)
 from PIL import Image
 
 from strata_python import images, testing
@@ -192,8 +193,9 @@ def test_crop_with_the_apps_own_reader(tmp_path):
 @pytest.mark.parametrize("ext", [".heic", ".avif", ".jxl", ".webp", ".tif", ".png"])
 def test_open_upright_reads_what_phones_and_cameras_write(tmp_path, ext):
     images.extensions()  # registers the HEIC and JPEG XL readers, as every reader here does
-    p = tmp_path / f"p{ext}"
-    Image.new("RGB", (64, 48), (200, 30, 30)).save(p)
+    nice = None if os.name == "nt" else os.getpriority(os.PRIO_PROCESS, 0)
+    p = testing.tiny_picture(tmp_path / f"p{ext}")
+    assert nice is None or os.getpriority(os.PRIO_PROCESS, 0) == nice  # encoded in a child (x265 lowers its nice)
     im = images.open_upright(p)
     assert im.size == (64, 48)
     assert images.size_upright(p) == (64, 48)
