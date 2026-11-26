@@ -65,6 +65,9 @@ pdf = [
 # strata_python.images: pictures turned by their EXIF orientation and cached JPEG thumbnails of them.
 images = [
     "pillow>=13,<14",
+    "pillow-heif>=1.1,<2",
+    "pillow-jxl-plugin>=1.3,<2",
+    "rawpy>=0.24,<1",
 ]
 
 [project.urls]

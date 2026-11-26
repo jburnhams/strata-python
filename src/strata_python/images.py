@@ -1,4 +1,11 @@
-"""Pictures the right way up, and cached JPEG thumbnails of them (needs `strata-python[images]`, which is Pillow).
+"""Pictures the right way up, whatever their format, and cached JPEG thumbnails of them (needs `strata-python[images]`:
+Pillow, pillow-heif, pillow-jxl-plugin and rawpy).
+
+Every reader here opens what phones and cameras write, not only what Pillow reads on its own: JPEG, PNG, WebP, AVIF,
+TIFF, GIF and BMP (Pillow), HEIC and HEIF (iPhones, pillow-heif), JPEG XL (pillow-jxl-plugin) and camera raw files
+(DNG, CR2, CR3, NEF, ARW, ORF, RW2, RAF and the rest LibRaw knows, developed by rawpy with the camera's white balance).
+`EXTENSIONS` lists them, for an app that picks pictures out of a folder; `size_upright(path)` is the size the readers
+return, which for a phone photo stored on its side is the stored size turned.
 
 strata-360 (`photos.thumb`, a thumb route per kind), strata-stills (`browser.cached`), bright-horizons and strata-scan
 each make a small JPEG of a picture on first request and keep it. Each copy turns it by its EXIF orientation, flattens
@@ -10,6 +17,7 @@ a different subset of that. Here:
     path = thumbnail(src, 1600, cache_dir=d, fmt="webp", quality=80)   # a medium copy to keep: WebP, a third smaller
     path = crop(src, (x0, y0, x1, y1), 160, cache_dir=d, pad=1.6)      # one face (any box), square, cached as WebP
     im = open_upright(src, draft=(640, 640))                         # EXIF-turned, decoded at a reduced size when it can
+    w, h = size_upright(src)                                         # without decoding (a raw file is developed)
     rgb = flatten(im)                                                # alpha on white, 16-bit and float scaled to 8-bit
     jpeg_bytes(im, quality=85)
 
@@ -25,6 +33,7 @@ import io
 import os
 import threading
 from collections.abc import Callable
+from pathlib import PurePath
 
 from PIL import Image, ImageOps
 
@@ -36,13 +45,110 @@ _LIMITS_LOCK = threading.Lock()
 _MAKING: dict[str, threading.Lock] = {}
 
 
+# Camera raw files, opened through LibRaw (rawpy): Adobe DNG and the makers' own formats.
+RAW_EXTENSIONS = frozenset(
+    [
+        ".dng",
+        ".cr2",
+        ".cr3",
+        ".crw",
+        ".nef",
+        ".nrw",
+        ".arw",
+        ".srf",
+        ".sr2",
+        ".orf",
+        ".rw2",
+        ".raf",
+        ".pef",
+        ".srw",
+        ".x3f",
+        ".3fr",
+        ".iiq",
+        ".mrw",
+        ".erf",
+        ".kdc",
+        ".dcr",
+        ".rwl",
+        ".mos",
+    ]
+)
+_PLUGINS_LOCK = threading.Lock()
+_plugins_registered = False
+
+
+def _register_plugins() -> None:
+    """Teach Pillow HEIC/HEIF and JPEG XL, once. Pillow reads AVIF itself (since 11.2)."""
+    global _plugins_registered
+    with _PLUGINS_LOCK:
+        if _plugins_registered:
+            return
+        import pillow_heif  # pyright: ignore[reportMissingTypeStubs]
+
+        pillow_heif.register_heif_opener()  # pyright: ignore[reportUnknownMemberType]
+        import pillow_jxl  # noqa: F401  # pyright: ignore[reportUnusedImport, reportMissingTypeStubs]  # registers itself on import
+
+        _plugins_registered = True
+
+
+def extensions() -> frozenset[str]:
+    """Every file extension the readers here open, lower case with the dot (`.heic`, `.jpg`, `.cr3`)."""
+    _register_plugins()
+    return frozenset(Image.registered_extensions()) | RAW_EXTENSIONS
+
+
+def is_raw(path: str | os.PathLike[str]) -> bool:
+    """Whether `path` names a camera raw file (by its extension), which the readers here develop through LibRaw."""
+    return PurePath(path).suffix.lower() in RAW_EXTENSIONS
+
+
+def open_raw(path: str | os.PathLike[str], *, half: bool = False) -> Image.Image:
+    """A camera raw file developed to 8-bit RGB with the camera's white balance, turned the way the camera held it.
+    `half` develops at half the size (four times faster), for a thumbnail. Not the embedded preview: its size differs
+    from camera to camera, and a face found on one picture must land on the same pixels in every copy made of it."""
+    import rawpy  # pyright: ignore[reportMissingTypeStubs]
+
+    try:
+        with rawpy.imread(os.fspath(path)) as raw:  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+            rgb = raw.postprocess(use_camera_wb=True, half_size=half, output_bps=8)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    except rawpy.LibRawError as e:  # pyright: ignore[reportUnknownMemberType]
+        raise OSError(f"cannot read the raw file {os.fspath(path)!r}: {e}") from e
+    return Image.fromarray(rgb)  # pyright: ignore[reportUnknownArgumentType]
+
+
 def open_upright(path: str | os.PathLike[str], *, draft: tuple[int, int] | None = None) -> Image.Image:
-    """The picture turned by its EXIF orientation. `draft` lets a JPEG decode at a reduced scale (at least that big),
-    which is far faster for a thumbnail of a 24-megapixel photo."""
+    """The picture turned by its EXIF orientation, in any format the module reads (see above). `draft` lets a JPEG
+    decode at a reduced scale (at least that big), which is far faster for a thumbnail of a 24-megapixel photo, and a
+    raw file develop at half size when that is still at least as big. A file none of them reads raises `OSError`
+    (Pillow's `UnidentifiedImageError` is one)."""
+    if is_raw(path):
+        if draft:
+            from rawpy import imread  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
+
+            try:
+                with imread(os.fspath(path)) as raw:  # pyright: ignore[reportUnknownVariableType]
+                    w, h = raw.sizes.width, raw.sizes.height  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+            except Exception as e:  # LibRaw's errors, and the OS's for a file that is not there
+                raise OSError(f"cannot read the raw file {os.fspath(path)!r}: {e}") from e
+            return open_raw(path, half=min(int(w), int(h)) // 2 >= max(draft))  # pyright: ignore[reportUnknownArgumentType]
+        return open_raw(path)
+    _register_plugins()
     im = Image.open(path)
     if draft:
         im.draft("RGB", draft)
     return ImageOps.exif_transpose(im)
+
+
+def size_upright(path: str | os.PathLike[str]) -> tuple[int, int]:
+    """(width, height) of the picture `open_upright` returns, read from the header where it can be: a photo whose EXIF
+    says it was taken on its side is stored the other way round, and boxes found on the upright picture are in its
+    pixels. A raw file is developed to know (LibRaw's own sizes leave out the camera's crop)."""
+    if is_raw(path):
+        return open_raw(path).size
+    _register_plugins()
+    with Image.open(path) as im:
+        turned = im.getexif().get(0x0112) in (5, 6, 7, 8)  # ExifTags.Base.Orientation: the four that swap the sides
+        return (im.height, im.width) if turned else (im.width, im.height)
 
 
 def flatten(im: Image.Image, background: tuple[int, int, int] = (255, 255, 255)) -> Image.Image:

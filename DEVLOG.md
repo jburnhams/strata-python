@@ -2,6 +2,18 @@
 
 Why each change was made and which files it touched, newest day first. For what changed in each release, as an app sees it, read [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-26
+
+**images reads HEIC, JPEG XL and camera raw files**
+
+The owner asked for strata-models' face store to take any picture format, HEIC first. The face store opens pictures through `images` (the kept medium copy, crops, a picture's size), so the readers belong here, where strata-stills and strata-360 get them too. Pillow 13 already reads AVIF, WebP, TIFF, PNG, GIF and BMP.
+
+- `pyproject.toml`, `uv.lock`: the `[images]` extra adds `pillow-heif` (HEIC/HEIF, registered with Pillow), `pillow-jxl-plugin` (JPEG XL, registers on import) and `rawpy` (LibRaw), all with wheels for Linux, macOS and Windows.
+- `src/strata_python/images.py`: `open_upright` registers the two Pillow plugins once and develops a raw file with rawpy (`open_raw`: camera white balance, 8-bit, LibRaw's own turn by the camera's orientation; at half size for a `draft` that leaves it big enough). It develops the raw data rather than taking the embedded preview, whose size differs between cameras, because a face found on one copy must land on the same pixels in every copy. New `extensions()`, `is_raw`, and `size_upright`, which reads a photo's size from its header with the sides swapped for EXIF orientations 5 to 8. strata-models read the stored size, so a phone photo taken upright had its width and height the wrong way round against boxes found on the upright picture.
+- `src/strata_python/testing.py`: **new** `tiny_dng`, a linear-raw DNG written byte by byte (no camera's file can be committed to a public repo, and LibRaw reads this one). Being linear, LibRaw does not halve it, so the half-size path is exercised but not measured.
+- `tests/unit/test_images.py`: HEIC, AVIF, JPEG XL, WebP, TIFF and PNG through `open_upright` and `size_upright`; a raw file developed and turned; a draft and a thumbnail of one; unreadable files as `OSError`; swapped sizes for orientation 6.
+- `CHANGELOG.md`, `README.md`.
+
 ## 2026-11-25
 
 **Windows CI installs ffmpeg even when the Chocolatey feed refuses it**
