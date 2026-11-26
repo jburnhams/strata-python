@@ -293,6 +293,7 @@ MODELS_RESULTS: dict[str, Json] = {
     "image-embed": {"images": [[0.6, 0.8]], "texts": [[1.0, 0.0], [0.0, 1.0]], "dim": 2},
     "face-kind": {"faces": [{"real": True, "kind": "person", "probs": {"person": 0.97, "statue": 0.03}}, {"real": False, "kind": "statue", "probs": {}}], "head": "trained head.npz"},
     "denoise-audio": {"path": "/out/c.wav", "duration_s": 4.0, "sample_rate": 48000, "seconds": 0.7, "engine": "dfn3", "model": "deepfilternet3", "lufs_in": -31.2, "lufs_out": -14.0, "removed_db": 6.5},
+    "speaker-embedding": {"dim": 2, "embeddings": [[0.6, 0.8], None, [0.8, 0.6]], "seconds": [3.2, 0.3, 30.0]},
     "audio-quality": {"dnsmos": {"sig": 3.4, "bak": 3.9, "ovrl": 3.0}, "squim": {"stoi": 0.93, "pesq": 2.8, "si_sdr": 14.2}, "duration_s": 4.0},
     "video-enhance": {
         "path": "/out/v.mp4", "width": 1440, "height": 1080, "fps": 50.0, "frames": 400, "seconds": 61.0, "engine": "ffmpeg", "model": "video-lanczos",
