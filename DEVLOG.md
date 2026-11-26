@@ -11,6 +11,7 @@ strata-voice is getting an Upload screen for found recordings of its speaker, wh
 - `src/strata_python/clients/models.py`: `speaker_embeddings` (items of path and optional clip, made absolute, in one job so a recording is decoded once) and `SpeakerEmbeddings` (a null in place of a stretch too short to place); the role joins `ROLES`.
 - `src/strata_python/testing.py`: `MODELS_RESULTS["speaker-embedding"]`, in the worker's own shape.
 - `tests/unit/test_clients_models.py`: the params sent and the typed result.
+- `README.md` (section 5b): `speaker_embeddings` and `SpeakerEmbeddings` listed; speaker-embedding no longer among the roles without a runtime (review, Codex).
 
 ## 2026-11-25
 
