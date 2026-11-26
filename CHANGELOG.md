@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.23 (2026-11-26)
+
 ### Added
 
 - `clients.models.speaker_embeddings(items, app)` and `SpeakerEmbeddings`: one normalised voice vector per (path, clip) from strata-models' `speaker-embedding` role (ECAPA), to keep one person's speech out of a recording that holds others. `FakeModels` answers the role (`MODELS_RESULTS["speaker-embedding"]`).
