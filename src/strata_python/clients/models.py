@@ -13,7 +13,7 @@ One shortcut per role the service runs (`ROLES`), each with its result shape:
     faces            Faces            face_kind        FaceKinds        ocr              OcrPage
     transcribe(-fast) Transcript      speak            Speech           denoise_audio    CleanAudio
     audio_quality    AudioQuality     generate_image   GeneratedImage   embed            Embeddings
-    enhance_video    EnhancedVideo    shot_boundaries  Shots
+    enhance_video    EnhancedVideo    shot_boundaries  Shots            speaker_embeddings SpeakerEmbeddings
     ask (vision-language, text, judge-text, judge-vision, judge-audio)  Answer
 
 The service URL is STRATA_MODELS_URL (default http://127.0.0.1:8366). Inputs are file paths: the service runs on the
@@ -244,6 +244,7 @@ ROLES = (
     "speak",
     "denoise-audio",
     "audio-quality",
+    "speaker-embedding",
     "image-generate",
     "image-embed",
     "video-enhance",
@@ -255,7 +256,7 @@ ROLES = (
     "judge-audio",
 )
 """The roles the service runs (each has a shortcut here; `ask` covers the language-model ones). `models.toml` also
-lists sound-events, speaker-embedding, detect-people, upscale, denoise and nsfw, but no runtime serves them yet: apps
+lists sound-events, detect-people, upscale, denoise and nsfw, but no runtime serves them yet: apps
 still load those models themselves. `run(role, params, app)` reaches any role, including one added after this list."""
 
 
@@ -414,6 +415,24 @@ def audio_quality(
     if metrics is not None:
         params["metrics"] = list(metrics)
     return run("audio-quality", params, app, priority=priority, model=model)
+
+
+def speaker_embeddings(
+    items: Sequence[tuple[str, tuple[float, float] | None]],
+    app: str,
+    priority: Priority = "normal",
+    model: str | None = None,
+) -> Json:
+    """One voice vector per stretch of speech, to tell speakers apart (role `speaker-embedding`,
+    `SpeakerEmbeddings.from_json`): `items` are (path, (start, end) seconds or None for the whole file), answered in
+    that order. A file named by several items is decoded once, so give every sentence of one recording in one call."""
+    asked: list[Json] = []
+    for path, clip in items:
+        item: Json = {"path": os.path.abspath(path)}
+        if clip is not None:
+            item["clip"] = [float(clip[0]), float(clip[1])]
+        asked.append(item)
+    return run("speaker-embedding", {"items": asked}, app, priority=priority, model=model)
 
 
 def enhance_video(path: str, app: str, priority: Priority = "normal", model: str | None = None, **params: Any) -> Json:
@@ -857,6 +876,25 @@ class AudioQuality:
             _floats_map(d.get("dnsmos")), _floats_map(d.get("squim")), _floats_map(d.get("intrusive")),
             _opt_float(d, "duration_s"), d,
         )  # fmt: skip
+
+
+@dataclass(frozen=True)
+class SpeakerEmbeddings:
+    """Role `speaker-embedding`: one L2-normalised vector per item asked for, in order (a dot product is the cosine
+    similarity: near 1 for one voice, near 0 for two), None for a stretch too short to place; `seconds` is how much of
+    each was measured (a long one is measured on its middle)."""
+
+    embeddings: list[list[float] | None]
+    seconds: list[float]
+    dim: int
+    raw: Json = field(default_factory=lambda: {}, repr=False, compare=False)
+
+    @classmethod
+    def from_json(cls, d: Json) -> SpeakerEmbeddings:
+        vectors = cast("list[Any]", d.get("embeddings") or [])
+        return cls(
+            [None if v is None else _floats(v) for v in vectors], _floats(d.get("seconds")), int(d.get("dim") or 0), d
+        )
 
 
 @dataclass(frozen=True)
