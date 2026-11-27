@@ -2,6 +2,16 @@
 
 Why each change was made and which files it touched, newest day first. For what changed in each release, as an app sees it, read [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-27
+
+**An edit rendered to one file (`render`)**
+
+strata-reels' next step (its spec S8) is a reel rendered from the tape without changing the tape: deterministic, frame exact, with a manifest of what made it. Cutting stretches of files and joining them is what strata-360 and any later app need too, so the ffmpeg side lives here and reels keeps only its table, job and manifest's own part (which reel and revision).
+
+- `src/strata_python/render.py` **new**: one ffmpeg run, one input per cut sought half a frame before its first frame (input seeking decodes from the keyframe before and drops what precedes the seek point, so the first kept frame is the cut's and a cut near a tape's end does not decode the tape from its start), `trim=end_frame` to the cut's frame count, `setpts` and `fps` to the output rate, the first file's display shape at the output height (other shapes letterboxed), and per cut audio resampled, padded and trimmed to the samples its frames own, rounded once from the edit's start so nothing drifts. Bitexact flags, no metadata, x264 at a fixed 4 threads (its output depends on the count). Constant frame rate assumed.
+- `tests/unit/test_render.py` **new**: sources whose frames carry their number in their brightness, read back with signalstats, so the tests check exactly which frames each cut kept (inside a GOP, on a keyframe, from the start, off-frame bounds); sound length, a file with no audio and one interlaced at another size; the same bytes twice and the manifest; height never above the source and a rate change; refusals and a failed run leaving nothing.
+- `README.md` module table, `AGENTS.md` layout, `CHANGELOG.md` Unreleased.
+
 ## 2026-11-26
 
 **A client for strata-models' speaker-embedding role**

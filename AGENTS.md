@@ -36,7 +36,7 @@ Prefer real code over mocks. A test that runs the real thing finds the bugs that
 ## Layout
 
 ```
-src/strata_python/   oslib, settings, web, cli, contracts, client, files, http, media, derive, mediatime, wav, wer, speech, images (the [images] extra), stats, http_server, live, testing, pytest_plugin, check, public_check; py.typed
+src/strata_python/   oslib, settings, web, cli, contracts, client, files, http, media, derive, render, mediatime, wav, wer, speech, images (the [images] extra), stats, http_server, live, testing, pytest_plugin, check, public_check; py.typed
   tasks/             retry, progress, flight (SingleFlight), status (StatusFile, Detached), ticker; queue, child and web (the [db] extra: a job per process; add_jobs routes)
   workflow/          pipeline (stages, gates, keys, MemoryStore) and machine (StateMachine); store (the [db] extra: DbStore, enqueue, move); web (add_workflow routes)
   clients/           one typed, standard-library-only client per strata service: models (strata-models), faces (its face store)
