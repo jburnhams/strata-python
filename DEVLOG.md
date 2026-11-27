@@ -2,6 +2,23 @@
 
 Why each change was made and which files it touched, newest day first. For what changed in each release, as an app sees it, read [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-27
+
+**`render`: the sound trimmed to the first frame, and each file's interlacing measured once (review of PR #91)**
+
+Two findings from the review. The input seek starts half a frame before a cut's first frame and drops the frame before it, but the sound kept that half frame, so it ran 20 ms early at 25 fps (measured: the onset of a tone that starts on the cut's first frame came 964 samples late in the output). And a file's interlacing was measured once per cut, not per file, because `setdefault` evaluates its default every time.
+
+- `src/strata_python/render.py`: `atrim=start_sample` of the preroll (the first frame's time less the seek point) before the sound's timestamps are reset; a cut with no `interlace` of its own reads the file's from a cache filled on the first miss. `RECIPE` stays 1, since 1 was never released.
+- `tests/unit/test_render.py`: a tone that starts on frame 25, cut from that frame, is heard from the output's first samples.
+
+**An edit rendered to one file (`render`)**
+
+strata-reels' next step (its spec S8) is a reel rendered from the tape without changing the tape: deterministic, frame exact, with a manifest of what made it. Cutting stretches of files and joining them is what strata-360 and any later app need too, so the ffmpeg side lives here and reels keeps only its table, job and manifest's own part (which reel and revision).
+
+- `src/strata_python/render.py` **new**: one ffmpeg run, one input per cut sought half a frame before its first frame (input seeking decodes from the keyframe before and drops what precedes the seek point, so the first kept frame is the cut's and a cut near a tape's end does not decode the tape from its start), `trim=end_frame` to the cut's frame count, `setpts` and `fps` to the output rate, the first file's display shape at the output height (other shapes letterboxed), and per cut audio resampled, padded and trimmed to the samples its frames own, rounded once from the edit's start so nothing drifts. Bitexact flags, no metadata, x264 at a fixed 4 threads (its output depends on the count). Constant frame rate assumed.
+- `tests/unit/test_render.py` **new**: sources whose frames carry their number in their brightness, read back with signalstats, so the tests check exactly which frames each cut kept (inside a GOP, on a keyframe, from the start, off-frame bounds); sound length, a file with no audio and one interlaced at another size; the same bytes twice and the manifest; height never above the source and a rate change; refusals and a failed run leaving nothing.
+- `README.md` module table, `AGENTS.md` layout, `CHANGELOG.md` Unreleased.
+
 ## 2026-11-26
 
 **A client for strata-models' speaker-embedding role**

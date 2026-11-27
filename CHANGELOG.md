@@ -4,6 +4,10 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `render.render(cuts, out, output=)`: an edit (stretches of files, `Cut(path, Span, gain_db=, interlace=)`) rendered to one MP4 with no gap, frame exact and sample exact, deinterlaced and fitted to the first file's shape, the same bytes each time for the same ffmpeg build. `Rendered` gives the probe, frame count, exact duration and SHA-256; `Rendered.manifest()` is the render manifest to store beside the file; `render.RECIPE` goes in an app's cache key; `render.ffmpeg_version()`.
+
 ## 0.2.24 (2026-11-26)
 
 ## 0.2.23 (2026-11-26)
