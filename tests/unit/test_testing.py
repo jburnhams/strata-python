@@ -182,10 +182,12 @@ def test_fake_face_store_names_people_through_the_real_client(fake_models):
     fs.set_tag("reels", opt_in=True)
     assert fake_models.faces.tags == {"reels": True}
     fake_models.faces.suggest["c"] = ann.id
-    groups = fs.group_tracks({"a": [1, 0], "b": [1, 0], "c": [0, 1]}, app="reels", apart=[("a", "b")])
+    groups = fs.group_tracks({"a": [1, 0], "b": [1, 0], "c": [0, 1]}, app="reels", apart=[("a", "b")]).groups
     assert [g.tracks for g in groups] == [["a"], ["b"], ["c"]]
     assert groups[2].suggested == fs.Suggested(ann.id, "Ann", 1.0)
-    assert [g.tracks for g in fs.group_tracks({"a": [1, 0], "b": [0.99, 0.1]}, app="reels")] == [["a", "b"]]
+    assert [g.tracks for g in fs.group_tracks({"a": [1, 0], "b": [0.99, 0.1]}, app="reels").groups] == [["a", "b"]]
+    fake_models.faces.hidden.add(img.faces[0].id)
+    assert fs.group_tracks({"a": [1, 0]}, app="reels", faces={"a": [img.faces[0].id]}).hidden == ["a"]
 
     with urllib.request.urlopen(fs.crop_url(img.faces[0].id)) as r:
         assert r.read().startswith(b"\x89PNG")

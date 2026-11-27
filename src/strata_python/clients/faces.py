@@ -199,6 +199,23 @@ class TrackGroup:
 
 
 @dataclass(frozen=True)
+class TrackGroups:
+    """`group_tracks`' answer: the groups, and the tracks left out because none of their faces is over the bar."""
+
+    groups: list[TrackGroup]
+    hidden: list[str]
+    model: str | None = None
+
+    @classmethod
+    def from_json(cls, d: Json) -> TrackGroups:
+        return cls(
+            [TrackGroup.from_json(_dict(g)) for g in _list(d.get("groups"))],
+            [str(k) for k in _list(d.get("hidden"))],
+            d.get("model"),
+        )
+
+
+@dataclass(frozen=True)
 class MergeSuggestion:
     a: int
     b: int
@@ -325,27 +342,31 @@ def group_tracks(
     tracks: Mapping[str, Sequence[float]],
     *,
     app: str,
+    faces: Mapping[str, Sequence[int]] | None = None,
     apart: Iterable[tuple[str, str]] = (),
     threshold: float | None = None,
     tags: Sequence[str] | None = None,
     include: Sequence[str] = (),
     model: str | None = None,
-) -> list[TrackGroup]:
+) -> TrackGroups:
     """A video's face tracks (key -> the track's embedding, `models.FaceTracks`) grouped into people, largest group
     first, never two tracks `apart` (seen in the same frame) in one group; each group with the known person the
-    confirmed faces nearest it agree on (`suggested`), searched in `tags` and `include` as `search` does. Nothing is
-    stored: the app keeps its tracks and indexes their stills to have them named."""
+    confirmed faces nearest it agree on (`suggested`), searched in `tags` and `include` as `search` does. `faces`
+    names each track's stills as stored (`index`): a track none of whose faces is over the store's bar is answered in
+    `hidden`, not grouped. Nothing is stored: the app keeps its tracks and indexes their stills to have them named."""
     body = {
         "app": app,
-        "tracks": [{"key": str(k), "embedding": [float(x) for x in v]} for k, v in tracks.items()],
+        "tracks": [
+            {"key": str(k), "embedding": [float(x) for x in v], "faces": [int(f) for f in (faces or {}).get(k, ())]}
+            for k, v in tracks.items()
+        ],
         "apart": [[str(a), str(b)] for a, b in apart],
         "threshold": threshold,
         "tags": None if tags is None else list(tags),
         "include": list(include),
         "model": model,
     }
-    d = models.request("POST", "/api/faces/group-tracks", body)
-    return [TrackGroup.from_json(g) for g in _list(d.get("groups"))]
+    return TrackGroups.from_json(models.request("POST", "/api/faces/group-tracks", body))
 
 
 def identities(*, app: str | None = None, q: str | None = None, limit: int = 200) -> list[Identity]:

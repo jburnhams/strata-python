@@ -523,7 +523,8 @@ class FakeFaceStore:
     pictures indexed with the faces the app found (`faces=`; a picture with none asks the service to detect, which the
     fake does not, so it stores none), the list of pictures by app and tag, decisions (`assign`, undone by batch),
     people, opt-in tags, crops (a tiny PNG), and `group-tracks` (tracks whose embeddings are within `threshold` of the
-    group's first, never two `apart`, with the person `suggest` names for any of its keys). Enough for an app to name
+    group's first, never two `apart`, with the person `suggest` names for any of its keys; a track whose `faces` are all
+    in `hidden` is answered hidden, as the service does for faces under its bar). Enough for an app to name
     people and read the names back; the service's own suite tests the real store.
 
         fake_models.faces.suggest["t3"] = 4               # group-tracks suggests person 4 for the group holding t3
@@ -539,6 +540,7 @@ class FakeFaceStore:
         self.batches: dict[int, list[tuple[int, tuple[int | None, str, int] | None]]] = {}  # batch -> what it replaced
         self.tags: dict[str, bool] = {}
         self.suggest: dict[str, int] = {}
+        self.hidden: set[int] = set()  # face ids under the store's bar (a track of only these is answered `hidden`)
         self._faces = 0
 
         def missing(what: str) -> Exception:
@@ -646,6 +648,10 @@ class FakeFaceStore:
         @app.post("/api/faces/group-tracks")
         def group(body: Json) -> Json:  # pyright: ignore[reportUnusedFunction]
             tracks = cast("list[Json]", body.get("tracks") or [])
+            hidden = [
+                str(t["key"]) for t in tracks if t.get("faces") and set(cast("list[int]", t["faces"])) <= self.hidden
+            ]
+            tracks = [t for t in tracks if str(t["key"]) not in hidden]
             keys = [str(t["key"]) for t in tracks]
             if len(set(keys)) != len(keys):
                 raise HTTPException(400, "every track needs a key of its own")
@@ -671,7 +677,7 @@ class FakeFaceStore:
                     else {"identity_id": who, "name": self.identities.get(who, {}).get("name"), "share": 1.0}
                 )
                 out.append({"tracks": ks, "size": len(ks), "suggested": hint})
-            return {"model": "fake-faces", "groups": out}
+            return {"model": "fake-faces", "groups": out, "hidden": hidden}
 
     def _face(self, face_id: int) -> Json | None:
         return next((f for i in self.images.values() for f in i["faces"] if f["id"] == face_id), None)

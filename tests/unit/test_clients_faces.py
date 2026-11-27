@@ -185,17 +185,24 @@ def test_group_tracks_sends_the_tracks_and_reads_the_groups(server):
                 {"tracks": ["t1", "t3"], "size": 2, "suggested": {"identity_id": 4, "name": "Ada", "share": 0.8}},
                 {"tracks": ["t2"], "size": 1, "suggested": None},
             ],
+            "hidden": ["t4"],
         },
     )
-    groups = fs.group_tracks(
-        {"t1": [1, 0], "t2": [0, 1], "t3": [1, 0]}, app="reels", apart=[("t1", "t2")], include=["reels"]
+    found = fs.group_tracks(
+        {"t1": [1, 0], "t2": [0, 1], "t3": [1, 0]},
+        app="reels",
+        faces={"t1": [5]},
+        apart=[("t1", "t2")],
+        include=["reels"],
     )
+    groups = found.groups
+    assert (found.hidden, found.model) == (["t4"], "buffalo_l")
     assert server.requests[0].json() == {
         "app": "reels",
         "tracks": [
-            {"key": "t1", "embedding": [1.0, 0.0]},
-            {"key": "t2", "embedding": [0.0, 1.0]},
-            {"key": "t3", "embedding": [1.0, 0.0]},
+            {"key": "t1", "embedding": [1.0, 0.0], "faces": [5]},
+            {"key": "t2", "embedding": [0.0, 1.0], "faces": []},
+            {"key": "t3", "embedding": [1.0, 0.0], "faces": []},
         ],
         "apart": [["t1", "t2"]],
         "threshold": None,
