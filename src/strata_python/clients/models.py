@@ -249,6 +249,7 @@ ROLES = (
     "image-embed",
     "video-enhance",
     "shot-boundaries",
+    "face-tracks",
     "vision-language",
     "text",
     "judge-text",
@@ -453,6 +454,18 @@ def shot_boundaries(
     give `timeout` to `run` instead when the app must not wait that long."""
     params["path"] = os.path.abspath(path)
     return run("shot-boundaries", params, app, priority=priority, model=model)
+
+
+def face_tracks(path: str, app: str, priority: Priority = "normal", model: str | None = None, **params: Any) -> Json:
+    """Faces in a video followed from frame to frame, one track per person per shot, each with its span, boxes,
+    embedding and best stills (role `face-tracks`, `FaceTracks.from_json`): params clip [start, end] seconds, cuts
+    (seconds: no track runs across one), fps, tracker, stills, still_gap_s, images, out_dir (where the stills' frames
+    are written), max_side. Boxes are in the video's pixels; a still's frame is decoded at most `max_side` across.
+    A long video takes about as long as it plays: give `timeout` to `run` instead when the app must not wait."""
+    params["path"] = os.path.abspath(path)
+    if params.get("out_dir"):
+        params["out_dir"] = os.path.abspath(str(params["out_dir"]))
+    return run("face-tracks", params, app, priority=priority, model=model)
 
 
 def role_model(role: str) -> str | None:
@@ -989,4 +1002,78 @@ class Shots:
             cuts, stretches("shots"), stretches("black"), _opt_float(d, "fps"), _opt_int(d, "frames"),
             _opt_float(d, "duration"), _opt_float(d, "threshold"), _opt_float(d, "min_shot_s"), _floats(d.get("scores") or []),
             _opt_str(d, "engine"), _opt_str(d, "model"), _opt_float(d, "seconds"), d,
+        )  # fmt: skip
+
+
+@dataclass(frozen=True)
+class TrackStill:
+    """One of a track's best faces: when, its box (the video's pixels), the frame saved for it (`image`, a JPEG decoded
+    at most `max_side` across, so its pixels may be fewer than the video's; None when `images` was false) and its
+    embedding."""
+
+    time: float
+    bbox: list[float]
+    det_score: float | None
+    quality: float | None
+    embedding: list[float]
+    image: str | None = None
+    kps: list[list[float]] = field(default_factory=lambda: [])
+    pose: list[float] = field(default_factory=lambda: [])
+
+    @classmethod
+    def from_json(cls, d: Json) -> TrackStill:
+        kps = [_floats(p) for p in cast("list[Any]", d.get("kps") or [])]
+        return cls(
+            float(d["time"]), _floats(d.get("bbox")), _opt_float(d, "det_score"), _opt_float(d, "quality"),
+            _floats(d.get("embedding")), _opt_str(d, "image"), kps, _floats(d.get("pose")),
+        )  # fmt: skip
+
+
+@dataclass(frozen=True)
+class FaceTrack:
+    """One person's face through one shot: its span in seconds of the file, how many faces it joined, their mean
+    quality, the quality-weighted mean embedding, its boxes ([time, x0, y0, x1, y1, det_score], the video's pixels)
+    and its stills."""
+
+    id: int
+    shot: int | None
+    start: float
+    end: float
+    faces: int
+    quality: float | None
+    embedding: list[float]
+    boxes: list[list[float]]
+    stills: list[TrackStill]
+
+    @classmethod
+    def from_json(cls, d: Json) -> FaceTrack:
+        return cls(
+            int(d["id"]), _opt_int(d, "shot"), float(d["start"]), float(d["end"]), int(d.get("faces") or 0),
+            _opt_float(d, "quality"), _floats(d.get("embedding")), [_floats(b) for b in cast("list[Any]", d.get("boxes") or [])],
+            [TrackStill.from_json(s) for s in cast("list[Json]", d.get("stills") or [])],
+        )  # fmt: skip
+
+
+@dataclass(frozen=True)
+class FaceTracks:
+    """Role `face-tracks` for one video: its tracks, the pairs of tracks seen in the same frame (`together`: two
+    people, whatever their faces look like), the video's size (boxes are in its pixels), and how it ran."""
+
+    tracks: list[FaceTrack]
+    together: list[tuple[int, int]]
+    width: int
+    height: int
+    fps: float | None = None
+    duration: float | None = None
+    tracker: str | None = None
+    seconds: float | None = None
+    raw: Json = field(default_factory=lambda: {}, repr=False, compare=False)
+
+    @classmethod
+    def from_json(cls, d: Json) -> FaceTracks:
+        pairs = [(int(a), int(b)) for a, b in cast("list[Sequence[Any]]", d.get("together") or [])]
+        return cls(
+            [FaceTrack.from_json(t) for t in cast("list[Json]", d.get("tracks") or [])], pairs,
+            int(d.get("width") or 0), int(d.get("height") or 0), _opt_float(d, "fps"), _opt_float(d, "duration"),
+            _opt_str(d, "tracker"), _opt_float(d, "seconds"), d,
         )  # fmt: skip

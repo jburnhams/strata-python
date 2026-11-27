@@ -23,7 +23,7 @@ only when named in `include`; `tags` narrows to pictures with any of those tags.
 from __future__ import annotations
 
 import urllib.parse
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -170,6 +170,35 @@ class Cluster:
 
 
 @dataclass(frozen=True)
+class Suggested:
+    """The known person a group of tracks looks like, and the share of its nearest confirmed faces that are theirs."""
+
+    identity_id: int
+    name: str | None
+    share: float
+
+
+@dataclass(frozen=True)
+class TrackGroup:
+    """Tracks (the app's keys) that look like one person, and who that may be (`group_tracks`)."""
+
+    tracks: list[str]
+    size: int
+    suggested: Suggested | None = None
+    raw: Json = field(default_factory=lambda: {}, repr=False)
+
+    @classmethod
+    def from_json(cls, d: Json) -> TrackGroup:
+        keys = [str(k) for k in _list(d.get("tracks"))]
+        s = d.get("suggested")
+        who = None
+        if isinstance(s, dict):
+            s = cast("Json", s)
+            who = Suggested(int(s["identity_id"]), s.get("name"), float(s.get("share") or 0.0))
+        return cls(keys, int(d.get("size") or len(keys)), who, d)
+
+
+@dataclass(frozen=True)
 class MergeSuggestion:
     a: int
     b: int
@@ -193,11 +222,14 @@ def index(
     det_thresh: float | None = None,
     faces: Sequence[Mapping[str, Any]] | None = None,
     model: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
     timeout: float = 600,
 ) -> IndexedImage:
     """Detect, embed and store the faces of one picture (`ref` is the app's own key for it: a sha256, a photo id,
     `clip:frame`). Indexing the same `ref` again with the same model settings answers the stored picture without a
-    job. `faces` gives detections already made (an import of embeddings made with `model`), and then no job runs."""
+    job. `faces` gives detections already made (an import of embeddings made with `model`, boxes in the picture's own
+    pixels), and then no job runs; `width` and `height` are the picture's, read from the file when not given."""
     body = {
         "app": app,
         "ref": ref,
@@ -209,12 +241,26 @@ def index(
         "det_thresh": det_thresh,
         "faces": None if faces is None else [dict(f) for f in faces],
         "model": model,
+        "width": width,
+        "height": height,
     }
     return IndexedImage.from_json(models.request("POST", "/api/faces/images", body, timeout=timeout))
 
 
 def image(image_id: int) -> IndexedImage:
     return IndexedImage.from_json(models.request("GET", f"/api/faces/images/{int(image_id)}"))
+
+
+def images(app: str | None = None, *, tag: str | None = None, page: int = 500) -> Iterator[IndexedImage]:
+    """Every picture `app` indexed (only those carrying `tag`, when given), newest first, with their faces and whom
+    each is assigned to: read a page at a time, so a long list is not held at once."""
+    before: object = None
+    while True:
+        d = models.request("GET", "/api/faces/images" + _q(app=app, tag=tag, limit=page, before=before))
+        yield from (IndexedImage.from_json(i) for i in _list(d.get("items")))
+        before = d.get("next")
+        if not before:
+            return
 
 
 def find_image(app: str, ref: str) -> IndexedImage | None:
@@ -273,6 +319,33 @@ def cluster(
         "min_score": min_score,
     }
     return [Cluster.from_json(c) for c in _list(models.request("POST", "/api/faces/cluster", body).get("clusters"))]
+
+
+def group_tracks(
+    tracks: Mapping[str, Sequence[float]],
+    *,
+    app: str,
+    apart: Iterable[tuple[str, str]] = (),
+    threshold: float | None = None,
+    tags: Sequence[str] | None = None,
+    include: Sequence[str] = (),
+    model: str | None = None,
+) -> list[TrackGroup]:
+    """A video's face tracks (key -> the track's embedding, `models.FaceTracks`) grouped into people, largest group
+    first, never two tracks `apart` (seen in the same frame) in one group; each group with the known person the
+    confirmed faces nearest it agree on (`suggested`), searched in `tags` and `include` as `search` does. Nothing is
+    stored: the app keeps its tracks and indexes their stills to have them named."""
+    body = {
+        "app": app,
+        "tracks": [{"key": str(k), "embedding": [float(x) for x in v]} for k, v in tracks.items()],
+        "apart": [[str(a), str(b)] for a, b in apart],
+        "threshold": threshold,
+        "tags": None if tags is None else list(tags),
+        "include": list(include),
+        "model": model,
+    }
+    d = models.request("POST", "/api/faces/group-tracks", body)
+    return [TrackGroup.from_json(g) for g in _list(d.get("groups"))]
 
 
 def identities(*, app: str | None = None, q: str | None = None, limit: int = 200) -> list[Identity]:

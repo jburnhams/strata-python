@@ -4,6 +4,13 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+### Added
+
+- `clients.models.face_tracks(path, app, cuts=...)` and `FaceTracks` (`FaceTrack`, `TrackStill`): strata-models' `face-tracks` role, faces followed through each shot of a video, with each track's span, boxes, embedding and best stills, and the pairs of tracks seen together.
+- `clients.faces.group_tracks({key: embedding}, app=, apart=)` and `TrackGroup` (`Suggested`): a video's tracks grouped into people by strata-models (never two seen together in one group), each group with the known person it looks like, as a suggestion.
+- `clients.faces.images(app, tag=)`: every picture an app indexed, a page at a time, with whom each face is assigned to; `index(..., width=, height=)` gives the picture's size with faces found already.
+- `fake_models.faces` (`testing.FakeFaceStore`): the face store's pictures, decisions, people, tags, crops and `group-tracks` in the stand-in service, so an app's tests name people through the real client; `MODELS_RESULTS["face-tracks"]` answers the role.
+
 ## 0.2.25 (2026-11-27)
 
 ### Added

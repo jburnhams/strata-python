@@ -156,3 +156,38 @@ def test_fake_models_finishes_on_the_first_poll_when_asked(live_app, monkeypatch
         assert sm.wait(job["id"], timeout=0) == {"text": "hi"}  # no running poll first
         with pytest.raises(sm.JobFailed, match="no lease 7"):
             sm._call("POST", "/api/leases/7/heartbeat")
+
+
+def test_fake_face_store_names_people_through_the_real_client(fake_models):
+    from strata_python.clients import faces as fs
+    from strata_python.clients import models as sm
+
+    img = fs.index(
+        "reels", "tape/t1/1.2", "/x.jpg", tags=["reels:tape"], faces=[{"bbox": [1, 2, 3, 4], "det_score": 0.9}]
+    )
+    again = fs.index("reels", "tape/t1/1.2", "/x.jpg", faces=[])
+    assert (again.id, img.tags, len(img.faces)) == (img.id, ["reels", "reels:tape"], 1)
+    fs.index("reels", "other", "/y.jpg")
+    assert [i.ref for i in fs.images("reels", tag="reels:tape")] == ["tape/t1/1.2"]
+    assert [i.id for i in fs.images("reels", page=1)] == [2, 1]
+    ann = fs.create_identity(name="Ann", app="reels")
+    batch = fs.assign([img.faces[0].id], ann.id, app="reels")
+    assert fs.image(img.id).faces[0].identity_id == ann.id
+    assert fs.identity(ann.id).faces == 1
+    assert [p.name for p in fs.identities(q="an")] == ["Ann"]
+    fs.undo(batch)
+    assert fs.image(img.id).faces[0].status is None
+    fs.assign([img.faces[0].id], None, app="reels", status="rejected")
+    assert fs.image(img.id).faces[0].status == "rejected"
+    fs.set_tag("reels", opt_in=True)
+    assert fake_models.faces.tags == {"reels": True}
+    fake_models.faces.suggest["c"] = ann.id
+    groups = fs.group_tracks({"a": [1, 0], "b": [1, 0], "c": [0, 1]}, app="reels", apart=[("a", "b")])
+    assert [g.tracks for g in groups] == [["a"], ["b"], ["c"]]
+    assert groups[2].suggested == fs.Suggested(ann.id, "Ann", 1.0)
+    assert [g.tracks for g in fs.group_tracks({"a": [1, 0], "b": [0.99, 0.1]}, app="reels")] == [["a", "b"]]
+
+    with urllib.request.urlopen(fs.crop_url(img.faces[0].id)) as r:
+        assert r.read().startswith(b"\x89PNG")
+    with pytest.raises(sm.JobFailed, match="no such person"):
+        fs.assign([img.faces[0].id], 99, app="reels")
