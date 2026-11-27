@@ -4,6 +4,13 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-27
 
+**`render`: the sound trimmed to the first frame, and each file's interlacing measured once (review of PR #91)**
+
+Two findings from the review. The input seek starts half a frame before a cut's first frame and drops the frame before it, but the sound kept that half frame, so it ran 20 ms early at 25 fps (measured: the onset of a tone that starts on the cut's first frame came 964 samples late in the output). And a file's interlacing was measured once per cut, not per file, because `setdefault` evaluates its default every time.
+
+- `src/strata_python/render.py`: `atrim=start_sample` of the preroll (the first frame's time less the seek point) before the sound's timestamps are reset; a cut with no `interlace` of its own reads the file's from a cache filled on the first miss. `RECIPE` stays 1, since 1 was never released.
+- `tests/unit/test_render.py`: a tone that starts on frame 25, cut from that frame, is heard from the output's first samples.
+
 **An edit rendered to one file (`render`)**
 
 strata-reels' next step (its spec S8) is a reel rendered from the tape without changing the tape: deterministic, frame exact, with a manifest of what made it. Cutting stretches of files and joining them is what strata-360 and any later app need too, so the ffmpeg side lives here and reels keeps only its table, job and manifest's own part (which reel and revision).

@@ -192,7 +192,13 @@ def render(
         # Half a frame early: the seek keeps frames from there, so the frame before the cut is dropped and its first kept.
         seek = max(Fraction(0), first_frame - own.frame_s / 2)
         args += ["-ss", _seconds(seek), "-i", c.path]
-        fi = fields.setdefault(c.path, c.interlace or derive.interlacing(c.path, info=info))
+        # A cut's own interlace wins; otherwise each file is measured once (it decodes up to 500 frames), not per cut.
+        if c.interlace is not None:
+            fi = c.interlace
+        else:
+            if c.path not in fields:
+                fields[c.path] = derive.interlacing(c.path, info=info)
+            fi = fields[c.path]
         length = Fraction(len(kept), 1) / own.fps
         frames_out = round(length * rate.fps)
         video = [
@@ -212,9 +218,13 @@ def render(
         end_sample = round((at + Fraction(frames_out) / rate.fps) * output.audio_rate)
         samples = end_sample - sample
         if info.audio is not None:
+            # The seek keeps sound from the seek point, half a frame before the first frame kept: trimmed here, or the
+            # sound would run that much early against the picture.
+            preroll = round((first_frame - seek) * output.audio_rate)
             audio = [
                 f"aresample={output.audio_rate}",
                 "aformat=channel_layouts=stereo",
+                *([f"atrim=start_sample={preroll}"] if preroll else []),
                 "asetpts=N/SR/TB",
                 *([f"volume={c.gain_db}dB"] if c.gain_db else []),
                 "apad",

@@ -145,3 +145,25 @@ def test_a_failed_render_leaves_nothing(sources, tmp_path):
             [render.Cut(sources["a"], Span.of("0", "1"))], tmp_path / "x.mp4", output=render.Output(preset="no-such")
         )
     assert not (tmp_path / "x.mp4").exists()
+
+
+def test_sound_starts_with_the_cut_s_first_frame_not_at_the_seek(sources, tmp_path):
+    # Silence, then a tone from exactly 1 s (frame 25). The cut starts on that frame, so its sound starts at once: the
+    # half frame the input is sought early (0.98 s) is trimmed from the sound as it is from the picture.
+    tone = _make(
+        tmp_path / "tone.mkv",
+        "-f", "lavfi", "-i", "color=c=black:size=320x240:rate=25:duration=2",
+        "-f", "lavfi", "-i", "aevalsrc='if(gte(t,1),0.8*sin(2*PI*1000*t),0)':s=48000:d=2",
+        "-c:v", "libx264", "-g", "25", "-pix_fmt", "yuv420p", "-c:a", "pcm_s16le",
+    )  # fmt: skip
+    render.render([render.Cut(tone, Span.of("1", "1.4"), interlace="progressive")], tmp_path / "reel.mp4")
+    pcm = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(tmp_path / "reel.mp4"), "-map", "0:a:0", "-f", "s16le", "-ac", "1", "-"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    loud = next(
+        i for i in range(len(pcm) // 2) if abs(int.from_bytes(pcm[2 * i : 2 * i + 2], "little", signed=True)) > 8000
+    )
+    # 20 ms (960 samples) late before the trim; AAC smears an onset by a few dozen samples at most.
+    assert loud < 200
