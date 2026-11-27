@@ -174,9 +174,20 @@ def test_fake_face_store_names_people_through_the_real_client(fake_models):
     batch = fs.assign([img.faces[0].id], ann.id, app="reels")
     assert fs.image(img.id).faces[0].identity_id == ann.id
     assert fs.identity(ann.id).faces == 1
-    assert [p.name for p in fs.identities(q="an")] == ["Ann"]
+    assert [p.name for p in fs.identities(q="an")] == ["Ann"]  # before Bob is made
     fs.undo(batch)
     assert fs.image(img.id).faces[0].status is None
+    # batch ids are never reused, and undoing an older batch leaves a newer decision on the same face standing
+    bob = fs.create_identity(name="Bob", app="reels", app_ref="b-1")
+    first = fs.assign([img.faces[0].id], ann.id, app="reels")
+    second = fs.assign([img.faces[0].id], bob.id, app="reels")
+    assert batch < first < second
+    fs.undo(first)
+    assert fs.image(img.id).faces[0].identity_id == bob.id
+    fs.undo(second)
+    assert fs.image(img.id).faces[0].status is None
+    assert fs.find_identity("reels", "b-1") == fs.identity(bob.id)
+    assert fs.find_identity("reels", "nobody") is None
     fs.assign([img.faces[0].id], None, app="reels", status="rejected")
     assert fs.image(img.id).faces[0].status == "rejected"
     fs.set_tag("reels", opt_in=True)

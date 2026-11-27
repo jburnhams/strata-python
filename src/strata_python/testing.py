@@ -536,8 +536,13 @@ class FakeFaceStore:
 
         self.images: dict[int, Json] = {}
         self.identities: dict[int, Json] = {}
-        self.decisions: dict[int, tuple[int | None, str, int]] = {}  # face id -> (person, status, batch)
-        self.batches: dict[int, list[tuple[int, tuple[int | None, str, int] | None]]] = {}  # batch -> what it replaced
+        # face id -> its newest decision not undone (person, status, batch), as the real store reads it
+        self.decisions: dict[int, tuple[int | None, str, int]] = {}
+        self.batches: dict[int, list[int]] = {}  # batch not undone -> the face ids it decided
+        self._history: dict[
+            int, list[tuple[int | None, str, int]]
+        ] = {}  # face id -> every decision not undone, oldest first
+        self._batch = 0  # batch ids are never reused, as the real store's are not
         self.tags: dict[str, bool] = {}
         self.suggest: dict[str, int] = {}
         self.hidden: set[int] = set()  # face ids under the store's bar (a track of only these is answered `hidden`)
@@ -607,24 +612,36 @@ class FakeFaceStore:
                 raise missing("person")
             if any(self._face(f) is None for f in ids):
                 raise missing("face")
-            batch = len(self.batches) + 1
-            self.batches[batch] = [(f, self.decisions.get(f)) for f in ids]
+            self._batch += 1
+            batch = self._batch
+            self.batches[batch] = ids
             for f in ids:
+                self._history.setdefault(f, []).append((who, status, batch))
                 self.decisions[f] = (who, status, batch)
             return {"batch": batch}
 
         @app.post("/api/faces/batches/{batch}/undo")
         def undo(batch: int) -> Json:  # pyright: ignore[reportUnusedFunction]
-            for f, before in reversed(self.batches.pop(batch, [])):
-                if before is None:
-                    self.decisions.pop(f, None)
+            # Takes the batch's decisions out of each face's history; a face keeps its newest decision left, so undoing an
+            # older batch leaves a later one standing.
+            for f in self.batches.pop(batch, []):
+                left = [d for d in self._history.get(f, []) if d[2] != batch]
+                self._history[f] = left
+                if left:
+                    self.decisions[f] = left[-1]
                 else:
-                    self.decisions[f] = before
+                    self.decisions.pop(f, None)
             return {"ok": True}
 
         @app.get("/api/identities")
-        def people(app: str | None = None, q: str | None = None, limit: int = 200) -> Json:  # pyright: ignore[reportUnusedFunction]
+        def people(app: str | None = None, q: str | None = None, app_ref: str | None = None, limit: int = 200) -> Json:  # pyright: ignore[reportUnusedFunction]
             rows = [p for p in self.identities.values() if q is None or q.lower() in str(p.get("name") or "").lower()]
+            if app_ref is not None:  # the person an app knows by its own reference (`find_identity`)
+                rows = [
+                    p
+                    for p in rows
+                    if app is not None and cast("Json", p["apps"].get(app) or {}).get("app_ref") == app_ref
+                ]
             return {"items": [self._person(p) for p in rows[:limit]]}
 
         @app.post("/api/identities", status_code=201)

@@ -4,6 +4,11 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-27
 
+**The fake face store's undo, batch ids and `find_identity`, from review of PR #93 (branch `claude/project-thread-l890x5`)**
+Codex found three places where the fake disagreed with the real store; each was real.
+- `src/strata_python/testing.py`: batch ids come from a counter, so undoing one never lets the next reuse its id; each face keeps its history of decisions not undone, so undoing an older batch leaves a newer decision standing, as the real store reads the newest one left; `GET /api/identities` filters by `app_ref` within the app, so `find_identity` finds the right person or none.
+- `tests/unit/test_testing.py`: both undo orders, the ids, and `find_identity` for a known and an unknown reference.
+
 **Clients for face tracks and grouping them into people, and a fake face store (branch `claude/project-thread-l890x5`)**
 strata-reels gets a people stage (a tape's faces followed, grouped, named by the person, then fed to the scene describer); the service's side is strata-models' `POST /api/faces/group-tracks` and the role `face-tracks`, and the typed clients every app uses belong here (strata-360 is the other user of face-tracks).
 - `src/strata_python/clients/models.py`: `face_tracks` (absolute `path` and `out_dir`), `FaceTracks`, `FaceTrack`, `TrackStill`; `face-tracks` added to `ROLES`.
