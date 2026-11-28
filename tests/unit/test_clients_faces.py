@@ -161,6 +161,8 @@ def test_assign_undo_tags_and_urls(server):
     fs.undo(11)
     fs.set_tag("kids", opt_in=True)
     assert server.requests[-1].json() == {"opt_in": True}
+    fs.set_tag("kids", opt_in=True, share_named=True)
+    assert server.requests[-1].json() == {"opt_in": True, "share_named": True}
     assert fs.tags() == [{"tag": "kids", "images": 3, "opt_in": True}]
     assert fs.crop_url(7, px=96) == f"{server.url}/api/faces/7/crop?px=96&pad=1.6"
     assert fs.picture_url(3) == f"{server.url}/api/faces/images/3/picture"

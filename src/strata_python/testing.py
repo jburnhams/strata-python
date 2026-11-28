@@ -544,6 +544,7 @@ class FakeFaceStore:
         ] = {}  # face id -> every decision not undone, oldest first
         self._batch = 0  # batch ids are never reused, as the real store's are not
         self.tags: dict[str, bool] = {}
+        self.shared: set[str] = set()  # opt-in tags whose named faces count everywhere (`share_named`)
         self.suggest: dict[str, int] = {}
         self.hidden: set[int] = set()  # face ids under the store's bar (a track of only these is answered `hidden`)
         self._faces = 0
@@ -660,7 +661,9 @@ class FakeFaceStore:
         @app.put("/api/faces/tags/{tag}")
         def set_tag(tag: str, body: Json) -> Json:  # pyright: ignore[reportUnusedFunction]
             self.tags[tag] = bool(body.get("opt_in"))
-            return {"tag": tag, "opt_in": self.tags[tag]}
+            if body.get("share_named") is not None:
+                (self.shared.add if body["share_named"] else self.shared.discard)(tag)
+            return {"tag": tag, "opt_in": self.tags[tag], "share_named": tag in self.shared}
 
         @app.post("/api/faces/group-tracks")
         def group(body: Json) -> Json:  # pyright: ignore[reportUnusedFunction]

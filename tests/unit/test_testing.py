@@ -192,6 +192,12 @@ def test_fake_face_store_names_people_through_the_real_client(fake_models):
     assert fs.image(img.id).faces[0].status == "rejected"
     fs.set_tag("reels", opt_in=True)
     assert fake_models.faces.tags == {"reels": True}
+    fs.set_tag("reels", opt_in=True, share_named=True)
+    assert fake_models.faces.shared == {"reels"}
+    fs.set_tag("reels", opt_in=True)  # left as it was
+    assert fake_models.faces.shared == {"reels"}
+    fs.set_tag("reels", opt_in=True, share_named=False)
+    assert fake_models.faces.shared == set()
     fake_models.faces.suggest["c"] = ann.id
     groups = fs.group_tracks({"a": [1, 0], "b": [1, 0], "c": [0, 1]}, app="reels", apart=[("a", "b")]).groups
     assert [g.tracks for g in groups] == [["a"], ["b"], ["c"]]
