@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.27 (2026-11-28)
+
 ### Added
 
 - `clients.faces.set_tag(tag, opt_in=True, share_named=True)`: an opt-in tag's faces a person confirmed for someone count in every search of the face store (strata-models PR #165), while its other faces stay out; left out, the setting stays as it was. `fake_models.faces.shared` holds the tags that share.
