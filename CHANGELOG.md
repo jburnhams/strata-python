@@ -4,6 +4,8 @@ What each release adds or changes for an app that depends on strata-python, newe
 
 ## Unreleased
 
+## 0.2.26 (2026-11-28)
+
 ### Added
 
 - `clients.models.face_tracks(path, app, cuts=...)` and `FaceTracks` (`FaceTrack`, `TrackStill`): strata-models' `face-tracks` role, faces followed through each shot of a video, with each track's span, boxes, embedding and best stills, and the pairs of tracks seen together.
