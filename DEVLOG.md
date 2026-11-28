@@ -5,7 +5,7 @@ Why each change was made and which files it touched, newest day first. For what 
 ## 2026-11-28
 
 **`set_tag(share_named=)` (branch `claude/project-thread-l890x5`)**
-Jonathan wants the faces named on a reels tape to help recognise those people in other apps; the face store learned `share_named` for opt-in tags in strata-models PR #165, and this passes it through.
+An app wants the faces named on a reels tape to help recognise those people in other apps; the face store learned `share_named` for opt-in tags in strata-models PR #165, and this passes it through.
 - `src/strata_python/clients/faces.py`: `set_tag(..., share_named=None)`, sent only when given.
 - `src/strata_python/testing.py`: `FakeFaceStore.shared`, set by the tags route.
 - `tests/unit/test_clients_faces.py`, `tests/unit/test_testing.py`.
