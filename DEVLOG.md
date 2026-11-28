@@ -2,6 +2,14 @@
 
 Why each change was made and which files it touched, newest day first. For what changed in each release, as an app sees it, read [CHANGELOG.md](CHANGELOG.md).
 
+## 2026-11-28
+
+**`set_tag(share_named=)` (branch `claude/project-thread-l890x5`)**
+Jonathan wants the faces named on a reels tape to help recognise those people in other apps; the face store learned `share_named` for opt-in tags in strata-models PR #165, and this passes it through.
+- `src/strata_python/clients/faces.py`: `set_tag(..., share_named=None)`, sent only when given.
+- `src/strata_python/testing.py`: `FakeFaceStore.shared`, set by the tags route.
+- `tests/unit/test_clients_faces.py`, `tests/unit/test_testing.py`.
+
 ## 2026-11-27
 
 **The fake face store's undo, batch ids and `find_identity`, from review of PR #93 (branch `claude/project-thread-l890x5`)**

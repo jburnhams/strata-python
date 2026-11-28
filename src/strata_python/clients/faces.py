@@ -18,7 +18,8 @@ thresholds, review screens' workflow, consent).
 
 Tags: every picture carries its app's name as a tag, plus any the app adds. `search` and `cluster` cover every tag
 by default except tags marked opt-in (`set_tag(tag, opt_in=True)`, e.g. other people's children), which are searched
-only when named in `include`; `tags` narrows to pictures with any of those tags."""
+only when named in `include` (an opt-in tag set with `share_named=True` still lends its confirmed faces to every
+search); `tags` narrows to pictures with any of those tags."""
 
 from __future__ import annotations
 
@@ -467,8 +468,13 @@ def merge_suggestions(*, limit: int = 50) -> list[MergeSuggestion]:
     return [MergeSuggestion.from_json(s) for s in _list(d.get("items"))]
 
 
-def set_tag(tag: str, *, opt_in: bool) -> None:
-    models.request("PUT", f"/api/faces/tags/{urllib.parse.quote(tag, safe='')}", {"opt_in": opt_in})
+def set_tag(tag: str, *, opt_in: bool, share_named: bool | None = None) -> None:
+    """Marks a tag opt-in or not. `share_named` (strata-models 2026-11-28) lets an opt-in tag's faces that a person confirmed
+    for someone count in every search all the same (its other faces stay out); None leaves it as it was."""
+    body: dict[str, bool] = {"opt_in": opt_in}
+    if share_named is not None:
+        body["share_named"] = share_named
+    models.request("PUT", f"/api/faces/tags/{urllib.parse.quote(tag, safe='')}", body)
 
 
 def tags() -> list[Json]:
