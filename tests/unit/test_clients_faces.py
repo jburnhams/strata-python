@@ -173,3 +173,63 @@ def test_errors_are_the_models_clients(server):
     server.route("GET", "/api/faces/images/5", {"detail": "down"}, status=503)
     with pytest.raises(sm.Unavailable):
         fs.image(5)
+
+
+def test_group_tracks_sends_the_tracks_and_reads_the_groups(server):
+    server.route(
+        "POST",
+        "/api/faces/group-tracks",
+        {
+            "model": "buffalo_l",
+            "groups": [
+                {"tracks": ["t1", "t3"], "size": 2, "suggested": {"identity_id": 4, "name": "Ada", "share": 0.8}},
+                {"tracks": ["t2"], "size": 1, "suggested": None},
+            ],
+            "hidden": ["t4"],
+        },
+    )
+    found = fs.group_tracks(
+        {"t1": [1, 0], "t2": [0, 1], "t3": [1, 0]},
+        app="reels",
+        faces={"t1": [5]},
+        apart=[("t1", "t2")],
+        include=["reels"],
+    )
+    groups = found.groups
+    assert (found.hidden, found.model) == (["t4"], "buffalo_l")
+    assert server.requests[0].json() == {
+        "app": "reels",
+        "tracks": [
+            {"key": "t1", "embedding": [1.0, 0.0], "faces": [5]},
+            {"key": "t2", "embedding": [0.0, 1.0], "faces": []},
+            {"key": "t3", "embedding": [1.0, 0.0], "faces": []},
+        ],
+        "apart": [["t1", "t2"]],
+        "threshold": None,
+        "tags": None,
+        "include": ["reels"],
+        "model": None,
+    }
+    assert (groups[0].tracks, groups[0].size, groups[0].suggested) == (["t1", "t3"], 2, fs.Suggested(4, "Ada", 0.8))
+    assert (groups[1].tracks, groups[1].suggested) == (["t2"], None)
+
+
+def test_images_reads_every_page(server):
+    server.route("GET", "/api/faces/images", {"items": [IMAGE], "next": 3}, once=True)
+    server.route("GET", "/api/faces/images", {"items": [dict(IMAGE, id=2)], "next": None}, once=True)
+    got = list(fs.images("myapp", tag="myapp:tape", page=1))
+    assert [i.id for i in got] == [3, 2]
+    assert server.requests[0].query == {"app": ["myapp"], "tag": ["myapp:tape"], "limit": ["1"]}
+    assert server.requests[1].query["before"] == ["3"]
+
+
+def test_index_sends_the_pictures_size_with_faces_found_already(server):
+    server.route("POST", "/api/faces/images", IMAGE)
+    fs.index("myapp", "p:1", "/data/p.jpg", faces=[{"bbox": [1, 2, 3, 4]}], model="buffalo_l", width=720, height=576)
+    body = server.requests[0].json()
+    assert (body["width"], body["height"], body["model"], body["faces"]) == (
+        720,
+        576,
+        "buffalo_l",
+        [{"bbox": [1, 2, 3, 4]}],
+    )

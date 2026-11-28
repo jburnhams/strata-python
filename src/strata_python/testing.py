@@ -302,6 +302,16 @@ MODELS_RESULTS: dict[str, Json] = {
         "crops": [{"id": "face", "label": "Gran", "box": [100, 50, 80, 80], "path": "/out/v-face.mp4", "stills": ["/out/v-face-3.png"]}],
         "stills": ["/out/v-1.png"], "enhance_s": 40.0, "quality": {"ssim": 0.91, "skipped": "no numpy"},
     },
+    "face-tracks": {
+        "tracks": [
+            {"id": 1, "shot": 0, "start": 0.4, "end": 3.2, "faces": 28, "quality": 0.61, "embedding": [0.6, 0.8], "boxes": [[0.4, 10, 20, 50, 70, 0.9]],
+             "stills": [{"time": 1.2, "bbox": [10, 20, 50, 70], "det_score": 0.93, "quality": 0.7, "sharpness": 0.5, "embedding": [0.6, 0.8], "kps": [[20, 30]], "pose": [1, 2, 3]}]},
+            {"id": 2, "shot": 0, "start": 1.0, "end": 2.0, "faces": 10, "quality": 0.4, "embedding": [1.0, 0.0], "boxes": [[1.0, 100, 20, 140, 70, 0.8]],
+             "stills": [{"time": 1.5, "bbox": [100, 20, 140, 70], "det_score": 0.8, "quality": 0.4, "sharpness": 0.3, "embedding": [1.0, 0.0]}]},
+        ],
+        "together": [[1, 2]], "shots": [{"start": 0.0, "end": 4.0}], "fps": 10.0, "frames": 40, "width": 720, "height": 576,
+        "duration": 4.0, "tracker": "byte", "seconds": 3.1, "model": "buffalo_l",
+    },
     "shot-boundaries": {
         "cuts": [{"time": 4.0, "frame": 100, "score": 0.82}, {"time": 9.36, "frame": 234, "score": 0.41}],
         "shots": [{"start": 0.0, "end": 4.0}, {"start": 4.0, "end": 9.36}, {"start": 9.36, "end": 12.0}],
@@ -463,6 +473,8 @@ class FakeModels:
             self.released.append(lease_id)
             return {"ok": True}
 
+        self.faces = FakeFaceStore(app)
+
     def fail(self, error: str = "the model failed", *, role: str | None = None) -> FakeModels:
         """The next job (of `role`, when given) fails with `error`. Calls queue up: each failure is used once."""
         self._failures.append((role, error))
@@ -504,6 +516,213 @@ class FakeModels:
         if not 1 <= lease_id <= len(self.leases):
             raise error(404, f"no lease {lease_id}")
         return self.leases[lease_id - 1]
+
+
+class FakeFaceStore:
+    """The part of strata-models' face store an app's tests reach (`FakeModels.faces`, on the same loopback server):
+    pictures indexed with the faces the app found (`faces=`; a picture with none asks the service to detect, which the
+    fake does not, so it stores none), the list of pictures by app and tag, decisions (`assign`, undone by batch),
+    people, opt-in tags, crops (a tiny PNG), and `group-tracks` (tracks whose embeddings are within `threshold` of the
+    group's first, never two `apart`, with the person `suggest` names for any of its keys; a track whose `faces` are all
+    in `hidden` is answered hidden, as the service does for faces under its bar). Enough for an app to name
+    people and read the names back; the service's own suite tests the real store.
+
+        fake_models.faces.suggest["t3"] = 4               # group-tracks suggests person 4 for the group holding t3
+        fake_models.faces.identities                       # id -> {"id", "name", ...}"""
+
+    def __init__(self, app: Any) -> None:
+        from fastapi import HTTPException
+        from fastapi.responses import Response
+
+        self.images: dict[int, Json] = {}
+        self.identities: dict[int, Json] = {}
+        # face id -> its newest decision not undone (person, status, batch), as the real store reads it
+        self.decisions: dict[int, tuple[int | None, str, int]] = {}
+        self.batches: dict[int, list[int]] = {}  # batch not undone -> the face ids it decided
+        self._history: dict[
+            int, list[tuple[int | None, str, int]]
+        ] = {}  # face id -> every decision not undone, oldest first
+        self._batch = 0  # batch ids are never reused, as the real store's are not
+        self.tags: dict[str, bool] = {}
+        self.suggest: dict[str, int] = {}
+        self.hidden: set[int] = set()  # face ids under the store's bar (a track of only these is answered `hidden`)
+        self._faces = 0
+
+        def missing(what: str) -> Exception:
+            return HTTPException(404, f"no such {what}")
+
+        @app.post("/api/faces/images")
+        def index(body: Json) -> Json:  # pyright: ignore[reportUnusedFunction]
+            app_name, ref = str(body.get("app") or ""), str(body.get("ref") or "")
+            if not app_name or not ref:
+                raise HTTPException(400, "a picture needs an app and a ref")
+            for img in self.images.values():
+                if (img["app"], img["ref"]) == (app_name, ref):
+                    return self._image(img)
+            faces: list[Json] = []
+            for f in cast("list[Json]", body.get("faces") or []):
+                self._faces += 1
+                faces.append({"id": self._faces, "box": [float(x) for x in cast("list[Any]", f["bbox"])], "det_score": f.get("det_score"),
+                              "kps": f.get("kps") or [], "pose": f.get("pose") or [], "embedding": f.get("embedding")})  # fmt: skip
+            n = len(self.images) + 1
+            img: Json = {"id": n, "app": app_name, "ref": ref, "path": body.get("path"), "url": body.get("url"),
+                   "tags": [app_name, *[str(t) for t in cast("list[Any]", body.get("tags") or []) if t != app_name]],
+                   "width": int(body.get("width") or 0), "height": int(body.get("height") or 0), "faces": faces}  # fmt: skip
+            for f in faces:
+                f["image_id"] = n
+            self.images[n] = img
+            return self._image(img)
+
+        @app.get("/api/faces/images")
+        def images(
+            app: str | None = None,
+            ref: str | None = None,
+            tag: str | None = None,
+            before: int | None = None,
+            limit: int = 50,
+        ) -> Json:  # pyright: ignore[reportUnusedFunction]
+            rows = [i for i in sorted(self.images.values(), key=lambda i: -int(i["id"]))
+                    if (app is None or i["app"] == app) and (ref is None or i["ref"] == ref)
+                    and (tag is None or tag in i["tags"]) and (before is None or i["id"] < before)][: max(1, min(limit, 500))]  # fmt: skip
+            return {
+                "items": [self._image(i) for i in rows],
+                "next": rows[-1]["id"] if len(rows) >= max(1, min(limit, 500)) else None,
+            }
+
+        @app.get("/api/faces/images/{image_id}")
+        def image(image_id: int) -> Json:  # pyright: ignore[reportUnusedFunction]
+            if image_id not in self.images:
+                raise missing("picture")
+            return self._image(self.images[image_id])
+
+        @app.get("/api/faces/{face_id}/crop")
+        def crop(face_id: int) -> Any:  # pyright: ignore[reportUnusedFunction]
+            if self._face(face_id) is None:
+                raise missing("face")
+            return Response(_PNG, media_type="image/png")
+
+        @app.post("/api/faces/assign")
+        def assign(body: Json) -> Json:  # pyright: ignore[reportUnusedFunction]
+            ids = [int(f) for f in cast("list[Any]", body.get("face_ids") or [])]
+            who = None if body.get("identity_id") is None else int(body["identity_id"])
+            status = str(body.get("status") or "confirmed")
+            if who is None and status != "rejected":
+                raise HTTPException(400, "only a rejection may name no person (the face is not a face)")
+            if who is not None and who not in self.identities:
+                raise missing("person")
+            if any(self._face(f) is None for f in ids):
+                raise missing("face")
+            self._batch += 1
+            batch = self._batch
+            self.batches[batch] = ids
+            for f in ids:
+                self._history.setdefault(f, []).append((who, status, batch))
+                self.decisions[f] = (who, status, batch)
+            return {"batch": batch}
+
+        @app.post("/api/faces/batches/{batch}/undo")
+        def undo(batch: int) -> Json:  # pyright: ignore[reportUnusedFunction]
+            # Takes the batch's decisions out of each face's history; a face keeps its newest decision left, so undoing an
+            # older batch leaves a later one standing.
+            for f in self.batches.pop(batch, []):
+                left = [d for d in self._history.get(f, []) if d[2] != batch]
+                self._history[f] = left
+                if left:
+                    self.decisions[f] = left[-1]
+                else:
+                    self.decisions.pop(f, None)
+            return {"ok": True}
+
+        @app.get("/api/identities")
+        def people(app: str | None = None, q: str | None = None, app_ref: str | None = None, limit: int = 200) -> Json:  # pyright: ignore[reportUnusedFunction]
+            rows = [p for p in self.identities.values() if q is None or q.lower() in str(p.get("name") or "").lower()]
+            if app_ref is not None:  # the person an app knows by its own reference (`find_identity`)
+                rows = [
+                    p
+                    for p in rows
+                    if app is not None and cast("Json", p["apps"].get(app) or {}).get("app_ref") == app_ref
+                ]
+            return {"items": [self._person(p) for p in rows[:limit]]}
+
+        @app.post("/api/identities", status_code=201)
+        def create(body: Json) -> Json:  # pyright: ignore[reportUnusedFunction]
+            p: Json = {"id": len(self.identities) + 1, "name": body.get("name"), "fields": dict(body.get("fields") or {}),
+                       "apps": {} if not body.get("app") else {str(body["app"]): {"fields": dict(body.get("app_fields") or {}), "app_ref": body.get("app_ref")}}}  # fmt: skip
+            self.identities[p["id"]] = p
+            return self._person(p)
+
+        @app.get("/api/identities/{identity_id}")
+        def person(identity_id: int) -> Json:  # pyright: ignore[reportUnusedFunction]
+            if identity_id not in self.identities:
+                raise missing("person")
+            return self._person(self.identities[identity_id])
+
+        @app.put("/api/faces/tags/{tag}")
+        def set_tag(tag: str, body: Json) -> Json:  # pyright: ignore[reportUnusedFunction]
+            self.tags[tag] = bool(body.get("opt_in"))
+            return {"tag": tag, "opt_in": self.tags[tag]}
+
+        @app.post("/api/faces/group-tracks")
+        def group(body: Json) -> Json:  # pyright: ignore[reportUnusedFunction]
+            tracks = cast("list[Json]", body.get("tracks") or [])
+            hidden = [
+                str(t["key"]) for t in tracks if t.get("faces") and set(cast("list[int]", t["faces"])) <= self.hidden
+            ]
+            tracks = [t for t in tracks if str(t["key"]) not in hidden]
+            keys = [str(t["key"]) for t in tracks]
+            if len(set(keys)) != len(keys):
+                raise HTTPException(400, "every track needs a key of its own")
+            apart = {frozenset((str(a), str(b))) for a, b in cast("list[list[Any]]", body.get("apart") or [])}
+            near = 1 - float(body.get("threshold") or 0.55)
+            groups: list[list[Json]] = []
+            for t in tracks:
+                for g in groups:
+                    if _cos(g[0]["embedding"], t["embedding"]) >= near and not any(
+                        frozenset((str(o["key"]), str(t["key"]))) in apart for o in g
+                    ):
+                        g.append(t)
+                        break
+                else:
+                    groups.append([t])
+            out: list[Json] = []
+            for g in sorted(groups, key=lambda g: -len(g)):
+                ks = [str(t["key"]) for t in g]
+                who = next((self.suggest[k] for k in ks if k in self.suggest), None)
+                hint = (
+                    None
+                    if who is None
+                    else {"identity_id": who, "name": self.identities.get(who, {}).get("name"), "share": 1.0}
+                )
+                out.append({"tracks": ks, "size": len(ks), "suggested": hint})
+            return {"model": "fake-faces", "groups": out, "hidden": hidden}
+
+    def _face(self, face_id: int) -> Json | None:
+        return next((f for i in self.images.values() for f in i["faces"] if f["id"] == face_id), None)
+
+    def _image(self, img: Json) -> Json:
+        faces: list[Json] = []
+        for f in cast("list[Json]", img["faces"]):
+            who, status, _ = self.decisions.get(int(f["id"]), (None, None, 0))
+            faces.append({k: v for k, v in f.items() if k != "embedding"} | {"identity_id": who, "status": status})
+        return {**img, "faces": faces}
+
+    def _person(self, p: Json) -> Json:
+        confirmed = sum(1 for who, st, _ in self.decisions.values() if who == p["id"] and st == "confirmed")
+        suggested = sum(1 for who, st, _ in self.decisions.values() if who == p["id"] and st == "suggested")
+        return {**p, "global_fields": p["fields"], "merged_into": None, "faces": confirmed, "suggested": suggested}
+
+
+def _cos(a: Sequence[float], b: Sequence[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    na, nb = math.sqrt(sum(x * x for x in a)), math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+# A 1x1 grey PNG: the fake's face crops.
+_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108000000003a7e9b550000000a49444154789c636800000082008177cd72b6"
+    "0000000049454e44ae426082"
+)
 
 
 def sine_wav(

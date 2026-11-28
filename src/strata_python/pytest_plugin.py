@@ -19,7 +19,8 @@ Without `strata_env_prefix` the plugin changes nothing but the no-network guard 
   fake_run                `subprocess.run` / `check_output`: `.returns["ffprobe"] = b"..."` for output, `.code = 1` to fail, `.calls`.
   no_sleep                `time.sleep` returns at once; `.delays` records the waits.
   fake_models             a stand-in strata-models on a real loopback port, with STRATA_MODELS_URL pointing at it: the app's own
-                          `strata_python.clients.models` calls run unchanged. `.results`, `.fail(...)`, `.busy`, `.down`, `.jobs`.
+                          `strata_python.clients.models` calls run unchanged. `.results`, `.fail(...)`, `.busy`, `.down`, `.jobs`;
+                          `.faces` the face store (`clients.faces`).
 The fakes are a last resort for a true external edge (strata_python.testing says when); prefer `http_server` and real programs."""
 
 import contextlib

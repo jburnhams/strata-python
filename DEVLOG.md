@@ -4,6 +4,18 @@ Why each change was made and which files it touched, newest day first. For what 
 
 ## 2026-11-27
 
+**The fake face store's undo, batch ids and `find_identity`, from review of PR #93 (branch `claude/project-thread-l890x5`)**
+Codex found three places where the fake disagreed with the real store; each was real.
+- `src/strata_python/testing.py`: batch ids come from a counter, so undoing one never lets the next reuse its id; each face keeps its history of decisions not undone, so undoing an older batch leaves a newer decision standing, as the real store reads the newest one left; `GET /api/identities` filters by `app_ref` within the app, so `find_identity` finds the right person or none.
+- `tests/unit/test_testing.py`: both undo orders, the ids, and `find_identity` for a known and an unknown reference.
+
+**Clients for face tracks and grouping them into people, and a fake face store (branch `claude/project-thread-l890x5`)**
+strata-reels gets a people stage (a tape's faces followed, grouped, named by the person, then fed to the scene describer); the service's side is strata-models' `POST /api/faces/group-tracks` and the role `face-tracks`, and the typed clients every app uses belong here (strata-360 is the other user of face-tracks).
+- `src/strata_python/clients/models.py`: `face_tracks` (absolute `path` and `out_dir`), `FaceTracks`, `FaceTrack`, `TrackStill`; `face-tracks` added to `ROLES`.
+- `src/strata_python/clients/faces.py`: `group_tracks` (each track's stored stills as `faces`, so the store can hide a track under its bar), `TrackGroups`, `TrackGroup`, `Suggested`; `images` (paged by `before`); `index` sends `width` and `height`, which the service already took.
+- `src/strata_python/testing.py`: **new** `FakeFaceStore`, mounted on `FakeModels` as `.faces`: index with faces given (detection is the service's, so a picture without faces stores none), list by app, ref and tag, assign and undo by batch, people, opt-in tags, a 1x1 PNG crop, and `group-tracks` by cosine to each group's first track with `apart` kept apart and `suggest` naming a person per key. `MODELS_RESULTS["face-tracks"]` in the service's shape.
+- Tests: `tests/unit/test_clients_models.py` (paths made absolute, the typed answer), `tests/unit/test_clients_faces.py` (group-tracks body and groups, every page of images, the size sent), `tests/unit/test_testing.py` (the fake store through the real client).
+
 **`render`: the sound trimmed to the first frame, and each file's interlacing measured once (review of PR #91)**
 
 Two findings from the review. The input seek starts half a frame before a cut's first frame and drops the frame before it, but the sound kept that half frame, so it ran 20 ms early at 25 fps (measured: the onset of a tone that starts on the cut's first frame came 964 samples late in the output). And a file's interlacing was measured once per cut, not per file, because `setdefault` evaluates its default every time.

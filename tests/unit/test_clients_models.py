@@ -2,6 +2,7 @@
 HTTP: the same endpoints, the same long-poll and lease steps, results in the service's own shapes (copied from its
 runtimes). strata-models tests the client against its real API in its own suite."""
 
+import os
 import warnings
 
 import pytest
@@ -260,3 +261,37 @@ def test_normal_and_low_work_is_queued_in_bulk_and_only_high_alone(service):
     assert out[1] == FACES
     with pytest.raises(sm.JobFailed, match="unknown role"):
         sm.submit_many("nope", [{}], app="x")
+
+
+TRACKS = {
+    "tracks": [
+        {
+            "id": 1, "shot": 0, "start": 0.4, "end": 3.2, "faces": 28, "quality": 0.61, "embedding": [0.6, 0.8],
+            "boxes": [[0.4, 10, 20, 50, 70, 0.9]],
+            "stills": [{"time": 1.2, "bbox": [10, 20, 50, 70], "det_score": 0.93, "quality": 0.7, "embedding": [0.6, 0.8],
+                        "image": "/out/t1-1.200.jpg", "kps": [[20, 30]], "pose": [1, 2, 3]}],
+        },
+        {"id": 2, "start": 1.0, "end": 2.0, "embedding": [1, 0]},
+    ],
+    "together": [[1, 2]], "width": 720, "height": 576, "fps": 10, "duration": 60.0, "tracker": "byte", "seconds": 41.5,
+}  # fmt: skip
+
+
+def test_face_tracks_sends_absolute_paths_and_reads_typed(service):
+    sm.face_tracks("tape.mkv", app="strata-reels", priority="low", cuts=[3.2], out_dir="stills")
+    job = service.jobs[-1]
+    assert (job["role"], job["priority"], job["params"]["cuts"]) == ("face-tracks", "low", [3.2])
+    assert os.path.isabs(job["params"]["path"])
+    assert job["params"]["path"].endswith("tape.mkv")
+    assert os.path.isabs(job["params"]["out_dir"])
+    t = sm.FaceTracks.from_json(TRACKS)
+    assert (t.together, t.width, t.height, t.fps, t.tracker) == ([(1, 2)], 720, 576, 10.0, "byte")
+    one, two = t.tracks
+    assert (one.id, one.shot, one.start, one.end, one.faces, one.quality) == (1, 0, 0.4, 3.2, 28, 0.61)
+    assert one.boxes == [[0.4, 10, 20, 50, 70, 0.9]]
+    st = one.stills[0]
+    assert (st.time, st.bbox, st.det_score, st.image, st.kps, st.pose) == (
+        1.2, [10, 20, 50, 70], 0.93, "/out/t1-1.200.jpg", [[20, 30]], [1, 2, 3],
+    )  # fmt: skip
+    assert (two.shot, two.faces, two.quality, two.stills, two.boxes) == (None, 0, None, [], [])
+    assert sm.FaceTracks.from_json({}).tracks == []
